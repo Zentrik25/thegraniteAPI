@@ -1,0 +1,72 @@
+"""
+signals.py — Django signals for The Granite Post articles app.
+
+Handles side effects that must not live in model.save():
+  - Enforce one article per top story rank slot before the DB constraint fires.
+    This covers direct ORM saves from management commands, tests, and fixtures
+    in addition to the admin save_model override.
+  - Log status transitions for the audit trail.
+
+Connected in apps.py via AppConfig.ready().
+"""
+
+import logging
+
+from django.db.models.signals import pre_save
+from django.dispatch import receiver
+from django.utils import timezone
+
+logger = logging.getLogger("articles.signals")
+
+
+@receiver(pre_save, sender="articles.Article")
+def enforce_unique_top_story_rank(sender, instance, **kwargs):
+    """
+    Before saving an article with top_story_rank set, displace any other
+    article currently occupying that rank by setting its rank to NULL.
+
+    This runs for every ORM save path — admin, shell, management commands,
+    and test factories — so the UniqueConstraint in Meta never trips.
+    """
+    if instance.top_story_rank is None:
+        return
+
+    displaced = (
+        sender.objects
+        .filter(top_story_rank=instance.top_story_rank)
+        .exclude(pk=instance.pk)
+    )
+    if displaced.exists():
+        count = displaced.update(top_story_rank=None, updated_at=timezone.now())
+        logger.info(
+            "enforce_unique_top_story_rank: cleared rank %d from %d article(s) "
+            "to assign it to pk=%s ('%s').",
+            instance.top_story_rank,
+            count,
+            instance.pk or "NEW",
+            instance.title,
+        )
+
+
+@receiver(pre_save, sender="articles.Article")
+def log_status_transition(sender, instance, **kwargs):
+    """
+    Log whenever an existing article's status changes.
+    Skips brand-new articles (pk is None) as there is no prior state.
+    """
+    if instance.pk is None:
+        return
+
+    try:
+        previous = sender.objects.only("status").get(pk=instance.pk)
+    except sender.DoesNotExist:
+        return
+
+    if previous.status != instance.status:
+        logger.info(
+            "Article pk=%s '%s': status %s → %s.",
+            instance.pk,
+            instance.title,
+            previous.status,
+            instance.status,
+        )
