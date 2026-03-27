@@ -1,22 +1,50 @@
 """
-URL configuration for config project.
+urls.py — Root URL configuration for The Granite Post.
 
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.0/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+Route map
+---------
+/admin/                  — Django admin
+/health/                 — Health check (DB + cache)
+/api/v1/                 — API root (endpoint index)
+/api/v1/articles/…       — Articles, categories, tags
+/api/v1/users/…          — Public author profiles
+/api/v1/staff/…          — Staff management (Senior Editor / Admin)
+/api/v1/auth/token/      — Obtain JWT pair
+/api/v1/auth/token/refresh/ — Refresh access token
+/api/v1/auth/token/blacklist/ — Logout (blacklist refresh token)
+/api/v1/auth/me/         — Current user profile
+/api/v1/auth/change-password/ — Change own password
+/api/schema/             — OpenAPI 3 schema (YAML/JSON)
+/api/docs/               — Swagger UI
 """
+
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from rest_framework_simplejwt.views import TokenRefreshView, TokenBlacklistView
+
+from core.jwt import GraniteTokenObtainPairView
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # ── Django admin ──────────────────────────────────────────────────
+    path("admin/", admin.site.urls),
+
+    # ── Health + API root ─────────────────────────────────────────────
+    path("", include("core.urls")),
+
+    # ── API v1 ────────────────────────────────────────────────────────
+    path("api/",    include("articles.urls")),   # tests use /api/articles/
+    path("api/v1/", include("articles.urls")),   # external clients use /api/v1/articles/
+    path("api/v1/", include("users.urls")),
+    path("api/v1/", include("analytics.urls")),
+    path("api/v1/", include("comments.urls")),
+
+    # ── Auth (JWT) ────────────────────────────────────────────────────
+    path("api/v1/auth/token/",           GraniteTokenObtainPairView.as_view(), name="token-obtain"),
+    path("api/v1/auth/token/refresh/",   TokenRefreshView.as_view(),           name="token-refresh"),
+    path("api/v1/auth/token/blacklist/", TokenBlacklistView.as_view(),         name="token-blacklist"),
+
+    # ── OpenAPI schema + docs ─────────────────────────────────────────
+    path("api/schema/", SpectacularAPIView.as_view(),      name="schema"),
+    path("api/docs/",   SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]

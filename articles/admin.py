@@ -127,6 +127,8 @@ class ArticleAdmin(admin.ModelAdmin):
     # List view
     # ------------------------------------------------------------------
 
+    save_on_top = True
+
     list_display = (
         "title",
         "status_badge",
@@ -178,8 +180,10 @@ class ArticleAdmin(admin.ModelAdmin):
             ),
             "fields": (
                 "is_breaking",
+                "is_top_story",
                 "top_story_rank",
                 "top_story_grid",
+                "is_featured",
                 "featured_rank",
             ),
         }),
@@ -370,8 +374,12 @@ class ArticleAdmin(admin.ModelAdmin):
     # ------------------------------------------------------------------
 
     def save_model(self, request, obj, form, change):
+        if not obj.is_featured:
+            obj.featured_rank = None
+        if not obj.is_top_story:
+            obj.top_story_rank = None
         if obj.top_story_rank is not None:
             Article.objects.exclude(pk=obj.pk).filter(
-                top_story_rank=obj.top_story_rank
-            ).update(top_story_rank=None, updated_at=timezone.now())
+                top_story_rank=obj.top_story_rank, is_top_story=True,
+            ).update(top_story_rank=None, is_top_story=False, updated_at=timezone.now())
         super().save_model(request, obj, form, change)

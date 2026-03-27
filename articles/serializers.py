@@ -75,6 +75,7 @@ class ArticleListSerializer(serializers.ModelSerializer):
             "image_alt",
             "published_at",
             "created_at",
+            "view_count",
         )
 
     def get_author_name(self, obj) -> str:

@@ -9,8 +9,6 @@ that iterates articles to avoid N+1 queries.
 from django.db import models
 from django.utils import timezone
 
-from .models import TOP_STORY_MAX, TOP_STORY_MIN
-
 
 class ArticleQuerySet(models.QuerySet):
 
@@ -55,6 +53,7 @@ class ArticleQuerySet(models.QuerySet):
 
     def top_story_at_rank(self, rank: int):
         """Return the article at a specific top story rank, or None."""
+        from .models import TOP_STORY_MAX, TOP_STORY_MIN
         if not (TOP_STORY_MIN <= rank <= TOP_STORY_MAX):
             raise ValueError(f"top_story rank must be {TOP_STORY_MIN}–{TOP_STORY_MAX}, got {rank}.")
         return self.published().filter(top_story_rank=rank).first()
@@ -118,6 +117,12 @@ class ArticleManager(models.Manager):
 
     def recent(self, n: int = 10):
         return self.get_queryset().recent(n)
+
+    def by_category(self, slug: str):
+        return self.get_queryset().by_category(slug)
+
+    def by_tag(self, slug: str):
+        return self.get_queryset().by_tag(slug)
 
     def with_related(self):
         return self.get_queryset().with_related()

@@ -302,7 +302,7 @@ class ArticleAPITests(APITestCase):
         make_published(self.staff, title="Breaking", is_breaking=True)
         r = self.client.get("/api/articles/breaking/")
         self.assertEqual(r.status_code, status.HTTP_200_OK)
-        self.assertTrue(all(a["is_breaking"] for a in r.data))
+        self.assertTrue(all(a["is_breaking"] for a in r.data["results"]))
 
     # -- Top story grid -----------------------------------------------------
 

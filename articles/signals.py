@@ -37,7 +37,7 @@ def enforce_unique_top_story_rank(sender, instance, **kwargs):
         .exclude(pk=instance.pk)
     )
     if displaced.exists():
-        count = displaced.update(top_story_rank=None, updated_at=timezone.now())
+        count = displaced.update(top_story_rank=None, is_top_story=False, updated_at=timezone.now())
         logger.info(
             "enforce_unique_top_story_rank: cleared rank %d from %d article(s) "
             "to assign it to pk=%s ('%s').",

@@ -18,6 +18,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
 
+from .managers import ArticleManager
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -219,13 +221,22 @@ class Article(TimeStampedModel):
         ),
     )
 
+    is_top_story = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "Tick to place this article in the top story grid. "
+            "Must also set a rank below."
+        ),
+    )
+
     top_story_rank = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
         db_index=True,
         help_text=(
             "Top story grid slot: 1 (lead/hero) through 6. "
-            "Leave blank if not in the top story grid. "
+            "Required when 'Is top story' is ticked. "
             "Each rank can only be held by one article at a time."
         ),
     )
@@ -262,11 +273,30 @@ class Article(TimeStampedModel):
     # Featured / hero placement (homepage widget, separate from top story)
     # ------------------------------------------------------------------
 
+    is_featured = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "Tick to place this article in the featured widget. "
+            "Must also set a rank below."
+        ),
+    )
+
     featured_rank = models.PositiveIntegerField(
         null=True,
         blank=True,
         db_index=True,
-        help_text="1 = hero slot on the homepage widget. Leave blank if not featured.",
+        help_text="1 = hero slot on the homepage widget. Required when 'Is featured' is ticked.",
+    )
+
+    # ------------------------------------------------------------------
+    # Analytics
+    # ------------------------------------------------------------------
+
+    view_count = models.PositiveIntegerField(
+        default=0,
+        db_index=True,
+        help_text="Cached view count. Updated atomically by analytics signals.",
     )
 
     # ------------------------------------------------------------------
@@ -335,13 +365,31 @@ class Article(TimeStampedModel):
                 ),
                 name="article_top_story_rank_1_to_6",
             ),
-            # Only one article per rank slot (PostgreSQL; SQLite ignores the condition in dev).
+            # is_featured=True requires a rank to be chosen.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_featured=False) |
+                    models.Q(featured_rank__isnull=False)
+                ),
+                name="article_featured_requires_rank",
+            ),
+            # is_top_story=True requires a rank to be chosen.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_top_story=False) |
+                    models.Q(top_story_rank__isnull=False)
+                ),
+                name="article_top_story_requires_rank",
+            ),
+            # Only one article per rank slot when is_top_story is ticked.
             models.UniqueConstraint(
                 fields=["top_story_rank"],
-                condition=models.Q(top_story_rank__isnull=False),
+                condition=models.Q(top_story_rank__isnull=False, is_top_story=True),
                 name="article_unique_top_story_rank",
             ),
         ]
+
+    objects = ArticleManager()
 
     def __str__(self) -> str:
         return self.title
@@ -356,7 +404,13 @@ class Article(TimeStampedModel):
         if not self.slug:
             self.slug = _unique_slug(Article, self.title, "article", 240, self.pk)
 
-        # 2. Stamp published_at the first time the article goes live.
+        # 2. Auto-sync boolean placement flags from their rank fields.
+        if self.top_story_rank is not None:
+            self.is_top_story = True
+        if self.featured_rank is not None:
+            self.is_featured = True
+
+        # 3. Stamp published_at the first time the article goes live.
         if self.status == PublishStatus.PUBLISHED and self.published_at is None:
             self.published_at = timezone.now()
 
@@ -385,16 +439,6 @@ class Article(TimeStampedModel):
     def resolved_og_image(self) -> str:
         """Social share image, falling back to the article lead image."""
         return self.og_image_url or self.image_url
-
-    @property
-    def is_featured(self) -> bool:
-        """True if this article occupies any featured slot on the homepage widget."""
-        return self.featured_rank is not None
-
-    @property
-    def is_top_story(self) -> bool:
-        """True if this article occupies any of the 6 top story grid slots."""
-        return self.top_story_rank is not None
 
     @property
     def is_live(self) -> bool:

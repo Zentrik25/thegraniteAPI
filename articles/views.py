@@ -22,9 +22,10 @@ GET  /api/tags/<slug>/             — tag + its published articles
 
 from django.shortcuts import get_object_or_404
 from rest_framework import filters, generics, permissions, status
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from core.pagination import StandardResultsPagination
 
 from .models import Article, Category, Tag, TOP_STORY_MAX, TOP_STORY_MIN
 from .serializers import (
@@ -35,16 +36,6 @@ from .serializers import (
     TagSerializer,
     TopStoryGridSerializer,
 )
-
-
-# ---------------------------------------------------------------------------
-# Pagination
-# ---------------------------------------------------------------------------
-
-class ArticlePagination(PageNumberPagination):
-    page_size             = 20
-    page_size_query_param = "page_size"
-    max_page_size         = 100
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +61,7 @@ class ArticleListCreateView(generics.ListCreateAPIView):
     POST — create a new article (staff only).
     """
 
-    pagination_class = ArticlePagination
+    pagination_class = StandardResultsPagination
     filter_backends  = [filters.SearchFilter, filters.OrderingFilter]
     search_fields    = ["title", "excerpt", "body", "tags__name", "category__name"]
     ordering_fields  = ["published_at", "created_at", "title"]
