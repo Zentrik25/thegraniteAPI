@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.sitemaps",
 
     # Third-party
     "rest_framework",
@@ -64,6 +65,8 @@ INSTALLED_APPS = [
     "users",
     "analytics.apps.AnalyticsConfig",
     "comments.apps.CommentsConfig",
+    "newsletter.apps.NewsletterConfig",
+    "feeds.apps.FeedsConfig",
 ]
 
 MIDDLEWARE = [

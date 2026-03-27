@@ -28,12 +28,12 @@ User = get_user_model()
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def make_user(username="editor", is_staff=False):
+def make_user(username="editor", role="author"):
     return User.objects.create_user(
         username=username,
         password="testpass123",
         email=f"{username}@granite.co.zw",
-        is_staff=is_staff,
+        role=role,
     )
 
 
@@ -239,7 +239,7 @@ class ArticleManagerTests(TestCase):
 class ArticleAPITests(APITestCase):
 
     def setUp(self):
-        self.staff  = make_user("staff", is_staff=True)
+        self.staff  = make_user("staff", role="editor")
         self.editor = make_user("reporter")
         self.cat    = Category.objects.create(name="News")
         self.article = make_published(
