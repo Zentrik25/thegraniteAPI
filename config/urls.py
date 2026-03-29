@@ -52,6 +52,7 @@ urlpatterns = [
     path("api/v1/", include("advertising.urls")),
     path("api/v1/", include("notifications.urls")),
     path("api/v1/", include("subscription.urls")),
+    path("api/v1/", include("subscriptions.urls")),
 
     # ── Auth (JWT) ────────────────────────────────────────────────────
     path("api/v1/auth/token/",           GraniteTokenObtainPairView.as_view(), name="token-obtain"),

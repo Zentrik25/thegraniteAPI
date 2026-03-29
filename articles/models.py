@@ -364,6 +364,19 @@ class Article(TimeStampedModel):
     )
 
     # ------------------------------------------------------------------
+    # Paywall
+    # ------------------------------------------------------------------
+
+    is_premium = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "Tick to gate this article behind a paid subscription. "
+            "Free readers will see a 402 Payment Required response."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Meta
     # ------------------------------------------------------------------
 

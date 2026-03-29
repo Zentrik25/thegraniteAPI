@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     "advertising.apps.AdvertisingConfig",
     "notifications.apps.NotificationsConfig",
     "subscription.apps.SubscriptionConfig",
+    "subscriptions.apps.SubscriptionsConfig",
 ]
 
 MIDDLEWARE = [
@@ -90,6 +91,7 @@ MIDDLEWARE = [
     "core.middleware.RequestTimingMiddleware",
     "core.middleware.SecurityHeadersMiddleware",
     "core.middleware.MaintenanceModeMiddleware",
+    "subscriptions.middleware.PaywallMiddleware",
 ]
 
 ROOT_URLCONF     = "config.urls"
@@ -293,7 +295,8 @@ LOGGING = {
         "comments":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
         "newsletter":   {"handlers": ["console"], "level": "DEBUG", "propagate": False},
         "search":       {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "media_assets": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "media_assets":  {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "subscriptions": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
     },
 }
 
@@ -301,3 +304,15 @@ CELERY_BROKER_URL            = "memory://" if _TESTING else os.environ.get("REDI
 CELERY_RESULT_BACKEND        = "cache+memory://"
 CELERY_TASK_ALWAYS_EAGER     = True
 CELERY_TASK_EAGER_PROPAGATES = False
+
+# Paynow Zimbabwe payment gateway
+PAYNOW_INTEGRATION_ID  = os.environ.get("PAYNOW_INTEGRATION_ID", "")
+PAYNOW_INTEGRATION_KEY = os.environ.get("PAYNOW_INTEGRATION_KEY", "")
+PAYNOW_RETURN_URL      = os.environ.get(
+    "PAYNOW_RETURN_URL",
+    "https://thegranite.co.zw/subscription/success/",
+)
+PAYNOW_RESULT_URL      = os.environ.get(
+    "PAYNOW_RESULT_URL",
+    "https://thegranite.co.zw/api/v1/subscriptions/paynow-callback/",
+)
