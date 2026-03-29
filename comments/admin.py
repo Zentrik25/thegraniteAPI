@@ -27,6 +27,7 @@ class CommentAdmin(admin.ModelAdmin):
         "is_reply",
         "created_at",
     )
+    list_select_related = ("article",)
     list_filter   = (StatusFilter, "created_at")
     search_fields = ("author_name", "author_email", "body", "article__title")
     ordering      = ("-created_at",)

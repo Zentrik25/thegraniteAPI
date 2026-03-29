@@ -1,28 +1,21 @@
-"""
-settings.py — The Granite Post CMS
-
-Environment variables (set in .env / deployment secrets):
-  SECRET_KEY            — Django secret key (required in production)
-  DEBUG                 — "true" or "false" (default: false)
-  ALLOWED_HOSTS         — comma-separated hostnames
-  DATABASE_URL          — postgres://user:pass@host:5432/dbname
-  REDIS_URL             — redis://host:6379/0
-  CORS_ALLOWED_ORIGINS  — comma-separated origins (e.g. https://thegranitepost.com)
-  MAINTENANCE_MODE      — "true" to enable maintenance mode (default: false)
-"""
-
 import os
+import sys
+from datetime import timedelta
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
+_TESTING = "test" in sys.argv
+
+# Load .env file before anything else
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _value = _line.split("=", 1)
+                os.environ.setdefault(_key.strip(), _value.strip())
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# ---------------------------------------------------------------------------
-# Core security
-# ---------------------------------------------------------------------------
 
 SECRET_KEY = os.environ.get(
     "SECRET_KEY",
@@ -39,10 +32,6 @@ ALLOWED_HOSTS = [
 
 MAINTENANCE_MODE = os.environ.get("MAINTENANCE_MODE", "false").lower() == "true"
 
-# ---------------------------------------------------------------------------
-# Application definition
-# ---------------------------------------------------------------------------
-
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -51,6 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.sitemaps",
+    "django.contrib.postgres",
 
     # Third-party
     "rest_framework",
@@ -59,20 +49,25 @@ INSTALLED_APPS = [
     "corsheaders",
     "drf_spectacular",
 
-    # Project apps
-    "core",
-    "articles",
-    "users",
+    # Project apps — order matters
+    "users.apps.UsersConfig",
+    "articles.apps.ArticlesConfig",
+    "core.apps.CoreConfig",
     "analytics.apps.AnalyticsConfig",
     "comments.apps.CommentsConfig",
     "newsletter.apps.NewsletterConfig",
     "feeds.apps.FeedsConfig",
     "media_assets.apps.MediaAssetsConfig",
+    "search.apps.SearchConfig",
+    "sections.apps.SectionsConfig",
+    "redirects.apps.RedirectsConfig",
+    "audit.apps.AuditConfig",
 ]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "redirects.middleware.RedirectMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -80,16 +75,16 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-
-    # Custom
     "core.middleware.StructuredLoggingMiddleware",
     "core.middleware.RequestTimingMiddleware",
     "core.middleware.SecurityHeadersMiddleware",
     "core.middleware.MaintenanceModeMiddleware",
-    
 ]
 
-ROOT_URLCONF = "config.urls"
+ROOT_URLCONF     = "config.urls"
+WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
+AUTH_USER_MODEL  = "users.StaffUser"
 
 TEMPLATES = [
     {
@@ -106,47 +101,34 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "config.wsgi.application"
-ASGI_APPLICATION  = "config.asgi.application"
-
-AUTH_USER_MODEL = "users.StaffUser"
-
-# ---------------------------------------------------------------------------
 # Database
-# ---------------------------------------------------------------------------
-
 _DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 if _DATABASE_URL:
-    import dj_database_url  # pip install dj-database-url
+    import dj_database_url
     DATABASES = {"default": dj_database_url.parse(_DATABASE_URL, conn_max_age=600)}
 else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            "NAME":   BASE_DIR / "db.sqlite3",
         }
     }
 
-# ---------------------------------------------------------------------------
-# Cache (Redis in production, local-memory for dev/SQLite)
-# ---------------------------------------------------------------------------
-
+# Cache
 REDIS_URL = os.environ.get("REDIS_URL", "")
-
-if REDIS_URL:
+if REDIS_URL and not _TESTING:
     CACHES = {
         "default": {
-            "BACKEND":   "django.core.cache.backends.redis.RedisCache",
-            "LOCATION":  REDIS_URL,
+            "BACKEND":    "django.core.cache.backends.redis.RedisCache",
+            "LOCATION":   REDIS_URL,
             "KEY_PREFIX": "granite",
-            "OPTIONS":   {"socket_connect_timeout": 5},
+            "OPTIONS":    {"socket_connect_timeout": 5},
         },
         "throttle": {
-            "BACKEND":   "django.core.cache.backends.redis.RedisCache",
-            "LOCATION":  REDIS_URL,
+            "BACKEND":    "django.core.cache.backends.redis.RedisCache",
+            "LOCATION":   REDIS_URL,
             "KEY_PREFIX": "granite:throttle",
-            "OPTIONS":   {"socket_connect_timeout": 5},
+            "OPTIONS":    {"socket_connect_timeout": 5},
         },
     }
 else:
@@ -161,10 +143,6 @@ else:
         },
     }
 
-# ---------------------------------------------------------------------------
-# Cache key registry and TTLs
-# ---------------------------------------------------------------------------
-
 CACHE_KEYS = {
     "ARTICLE_DETAIL":  "articles:detail:{slug}",
     "ARTICLE_LIST":    "articles:list",
@@ -175,6 +153,7 @@ CACHE_KEYS = {
     "CATEGORY_DETAIL": "categories:detail:{slug}",
     "TAG_LIST":        "tags:list",
     "TAG_DETAIL":      "tags:detail:{slug}",
+    "AUTHOR_PROFILE":  "users:profile:{slug}",
 }
 
 CACHE_TTL = {
@@ -188,10 +167,6 @@ CACHE_TTL = {
     "CATEGORY_DETAIL": 300,
 }
 
-# ---------------------------------------------------------------------------
-# Password validation
-# ---------------------------------------------------------------------------
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -199,18 +174,10 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ---------------------------------------------------------------------------
-# Internationalisation
-# ---------------------------------------------------------------------------
-
 LANGUAGE_CODE = "en-us"
 TIME_ZONE     = "Africa/Harare"
 USE_I18N      = True
 USE_TZ        = True
-
-# ---------------------------------------------------------------------------
-# Static files
-# ---------------------------------------------------------------------------
 
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
@@ -221,22 +188,14 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------------------------------------------------------------------------
 # CORS
-# ---------------------------------------------------------------------------
-
 _CORS_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "")
-
 if _CORS_ORIGINS:
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _CORS_ORIGINS.split(",") if o.strip()]
 else:
     CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 CORS_ALLOW_CREDENTIALS = True
-
-# ---------------------------------------------------------------------------
-# Django REST Framework
-# ---------------------------------------------------------------------------
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -257,27 +216,19 @@ REST_FRAMEWORK = {
         "core.throttling.BurstRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        # Sustained hourly caps per role
         "anon":          "500/hour",
         "contributor":   "1000/hour",
         "author":        "2000/hour",
         "editor":        "5000/hour",
         "senior_editor": "10000/hour",
         "admin":         "20000/hour",
-        # Login/sensitive endpoints
         "strict_anon":   "10/hour",
     },
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardResultsPagination",
     "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "core.exceptions.structured_exception_handler",
 }
-
-# ---------------------------------------------------------------------------
-# JWT (SimpleJWT)
-# ---------------------------------------------------------------------------
-
-from datetime import timedelta
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME":    timedelta(minutes=60),
@@ -288,21 +239,17 @@ SIMPLE_JWT = {
     "TOKEN_OBTAIN_SERIALIZER":  "core.jwt.GraniteTokenObtainPairSerializer",
 }
 
-# ---------------------------------------------------------------------------
-# drf-spectacular (OpenAPI 3 schema + Swagger UI)
-# ---------------------------------------------------------------------------
-
 SPECTACULAR_SETTINGS = {
-    "TITLE":       "The Granite Post API",
-    "DESCRIPTION": "Editorial CMS API for The Granite Post news platform.",
-    "VERSION":     "1.0.0",
+    "TITLE":                "The Granite Post API",
+    "DESCRIPTION":          "Editorial CMS API for The Granite Post news platform.",
+    "VERSION":              "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "SCHEMA_PATH_PREFIX":   "/api/v1/",
 }
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+ADMIN_SITE_HEADER = "The Granite Post — Editorial CMS"
+ADMIN_SITE_TITLE  = "Granite Post Admin"
+ADMIN_INDEX_TITLE = "Newsroom Administration"
 
 LOGGING = {
     "version": 1,
@@ -310,7 +257,7 @@ LOGGING = {
     "formatters": {
         "verbose": {
             "format": "{levelname} {asctime} {name} {message}",
-            "style": "{",
+            "style":  "{",
         },
     },
     "handlers": {
@@ -324,18 +271,19 @@ LOGGING = {
         "level":    "WARNING",
     },
     "loggers": {
-        "django":   {"handlers": ["console"], "level": "INFO",  "propagate": False},
-        "core":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "articles": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "users":    {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "django":       {"handlers": ["console"], "level": "INFO",  "propagate": False},
+        "core":         {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "articles":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "users":        {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "analytics":    {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "comments":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "newsletter":   {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "search":       {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "media_assets": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
     },
 }
 
-# ---------------------------------------------------------------------------
-# Celery
-# ---------------------------------------------------------------------------
-
-CELERY_BROKER_URL        = os.environ.get("REDIS_URL", "memory://")
-CELERY_RESULT_BACKEND    = "cache+memory://"
-CELERY_TASK_ALWAYS_EAGER     = True   # run tasks inline (no broker) — safe for tests & dev
-CELERY_TASK_EAGER_PROPAGATES = False  # don't propagate task errors to caller in eager mode
+CELERY_BROKER_URL            = "memory://" if _TESTING else os.environ.get("REDIS_URL", "memory://")
+CELERY_RESULT_BACKEND        = "cache+memory://"
+CELERY_TASK_ALWAYS_EAGER     = True
+CELERY_TASK_EAGER_PROPAGATES = False

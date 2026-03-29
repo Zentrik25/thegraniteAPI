@@ -13,6 +13,7 @@ Features:
 """
 
 from django.contrib import admin
+from django.db.models import Count
 from django.utils import timezone
 from django.utils.html import format_html, mark_safe
 
@@ -60,14 +61,19 @@ class CategoryAdmin(admin.ModelAdmin):
     ordering        = ("name",)
 
     fieldsets = (
-        (None, {"fields": ("name", "slug", "description")}),
+        (None, {"fields": ("name", "slug", "description", "section")}),
         ("Social / SEO", {"fields": ("og_image_url",), "classes": ("collapse",)}),
         ("Audit", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
 
-    @admin.display(description="Articles")
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _article_count=Count("articles", distinct=True)
+        )
+
+    @admin.display(description="Articles", ordering="_article_count")
     def article_count(self, obj):
-        return obj.articles.count()
+        return obj._article_count
 
 
 # ---------------------------------------------------------------------------
@@ -81,9 +87,14 @@ class TagAdmin(admin.ModelAdmin):
     readonly_fields = ("slug", "created_at", "updated_at")
     ordering        = ("name",)
 
-    @admin.display(description="Articles")
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _article_count=Count("articles", distinct=True)
+        )
+
+    @admin.display(description="Articles", ordering="_article_count")
     def article_count(self, obj):
-        return obj.articles.count()
+        return obj._article_count
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +157,14 @@ class ArticleAdmin(admin.ModelAdmin):
         "category",
         "author",
     )
-    search_fields  = ("title", "excerpt", "body", "slug")
-    date_hierarchy = "created_at"
+    # Exclude "body" — LIKE '%…%' on large text causes full scans; title/excerpt/slug cover admin needs.
+    search_fields  = ("title", "excerpt", "slug")
+    # date_hierarchy removed — fires 2-3 extra COUNT queries on every page load.
     ordering       = ("-created_at",)
-    list_per_page  = 25
+    list_per_page       = 25
+    list_select_related = ("author", "category")
+    # Disable "Show counts" — Django 5+ fires a COUNT per filter option when clicked.
+    show_facets = admin.ShowFacets.NEVER
 
     # ------------------------------------------------------------------
     # Detail view
@@ -219,11 +234,9 @@ class ArticleAdmin(admin.ModelAdmin):
 
     @admin.action(description="✅  Publish selected articles")
     def action_publish(self, request, queryset):
-        updated = 0
-        for article in queryset.exclude(status="published"):
-            article.status = "published"
-            article.save()
-            updated += 1
+        updated = queryset.exclude(status="published").update(
+            status="published", updated_at=timezone.now(),
+        )
         self.message_user(request, f"{updated} article(s) published.")
 
     @admin.action(description="↩️  Unpublish → Draft selected articles")

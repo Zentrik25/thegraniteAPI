@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.models import Group
 from django.db import connection
+from django.db.models import Count
 from django.utils.html import format_html
 
 from django.core.cache import cache
@@ -40,9 +41,14 @@ class GroupAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None) -> bool:
         return request.user.is_superuser
 
-    @admin.display(description="Members")
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _member_count=Count("user", distinct=True)
+        )
+
+    @admin.display(description="Members", ordering="_member_count")
     def member_count(self, obj) -> int:
-        return obj.user_set.count()
+        return obj._member_count
 
 
 # ---------------------------------------------------------------------------
@@ -156,17 +162,17 @@ def custom_index(self, request, extra_context=None):
     except Exception as exc:
         cache_status = f"error: {exc}"
 
-    # Article counts
+    # Article counts — single aggregated query instead of 4 separate COUNTs
     try:
+        from django.db.models import Count, Q
         from articles.models import Article, PublishStatus
-        article_counts = {
-            "published": Article.objects.filter(status=PublishStatus.PUBLISHED).count(),
-            "draft":     Article.objects.filter(status=PublishStatus.DRAFT).count(),
-            "review":    Article.objects.filter(status=PublishStatus.REVIEW).count(),
-            "breaking":  Article.objects.filter(
-                status=PublishStatus.PUBLISHED, is_breaking=True
-            ).count(),
-        }
+        counts = Article.objects.aggregate(
+            published=Count("id", filter=Q(status=PublishStatus.PUBLISHED)),
+            draft=Count("id", filter=Q(status=PublishStatus.DRAFT)),
+            review=Count("id", filter=Q(status=PublishStatus.REVIEW)),
+            breaking=Count("id", filter=Q(status=PublishStatus.PUBLISHED, is_breaking=True)),
+        )
+        article_counts = counts
     except Exception:
         article_counts = {}
 

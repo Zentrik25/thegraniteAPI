@@ -14,6 +14,8 @@ Designed for editorial workflow at a news publication:
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
@@ -106,6 +108,14 @@ class Category(TimeStampedModel):
     name        = models.CharField(max_length=100, unique=True)
     slug        = models.SlugField(max_length=120, unique=True, blank=True)
     description = models.TextField(blank=True)
+    section = models.ForeignKey(
+        "sections.Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="categories",
+        help_text="Top-level section this category belongs to.",
+    )
     og_image_url = models.URLField(
         blank=True,
         help_text="Open Graph image shown when this section is shared on social media.",
@@ -300,6 +310,17 @@ class Article(TimeStampedModel):
     )
 
     # ------------------------------------------------------------------
+    # Full-text search
+    # ------------------------------------------------------------------
+
+    search_vector = SearchVectorField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Pre-computed search vector. Updated automatically on publish.",
+    )
+
+    # ------------------------------------------------------------------
     # Media — external CDN URLs (not file uploads)
     # ------------------------------------------------------------------
 
@@ -355,6 +376,7 @@ class Article(TimeStampedModel):
             models.Index(fields=["featured_rank"],                    name="article_featured_rank_idx"),
             models.Index(fields=["is_breaking", "published_at"],      name="article_breaking_pub_idx"),
             models.Index(fields=["top_story_rank"],                   name="article_top_story_rank_idx"),
+            GinIndex(fields=["search_vector"],                        name="article_search_gin_idx"),
         ]
         constraints = [
             # top_story_rank must be 1–6 when set.

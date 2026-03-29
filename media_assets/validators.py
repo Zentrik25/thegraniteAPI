@@ -9,7 +9,7 @@ ACCEPTED_FORMATS = {
 }
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024   # 10MB
-MIN_WIDTH_PX        = 400
+MIN_WIDTH_PX        = 800
 
 
 def validate_image_file(file) -> dict:
