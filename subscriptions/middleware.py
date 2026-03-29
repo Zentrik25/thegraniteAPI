@@ -36,7 +36,7 @@ class PaywallMiddleware:
     """
     Middleware that enforces premium article access based on subscription plan.
 
-    Only intercepts GET requests matching /api/v1/articles/<slug>/.
+Only intercepts GET/HEAD requests matching /api/v1/articles/<slug>/.
     All other methods and paths are passed through immediately.
 
     Subscription status is cached per reader for 5 minutes.
@@ -49,8 +49,8 @@ class PaywallMiddleware:
 
     def __call__(self, request: HttpRequest):
         """Process the request, enforcing the paywall where applicable."""
-        # Only intercept GET requests that match the article detail path
-        if request.method != "GET":
+        # Only intercept GET/HEAD requests that match the article detail path
+        if request.method not in {"GET", "HEAD"}:
             return self.get_response(request)
 
         match = _ARTICLE_DETAIL_RE.match(request.path_info)

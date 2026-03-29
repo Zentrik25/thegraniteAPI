@@ -28,6 +28,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import IntegrityError
 from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -40,6 +41,7 @@ from rest_framework.views import APIView
 from accounts.authentication import ReaderJWTAuthentication
 from accounts.permissions import IsReader
 from core.pagination import StandardResultsPagination
+from core.throttling import BurstRateThrottle
 from users.permissions import IsSeniorEditorOrAbove
 
 from .models import (
@@ -63,6 +65,8 @@ from .serializers import (
     SubscriptionPlanSerializer,
     SubscriptionSerializer,
 )
+from .throttling import PaynowCallbackThrottle, PaymentPollThrottle
+from . import services
 from .tasks import process_paynow_callback
 
 logger = logging.getLogger("subscriptions.views")
@@ -110,13 +114,8 @@ class MySubscriptionView(APIView):
 
     @extend_schema(responses=SubscriptionSerializer)
     def get(self, request) -> Response:
-        """Return the most recent subscription for the authenticated reader."""
-        subscription = (
-            Subscription.objects.filter(reader=request.user)
-            .select_related("plan")
-            .order_by("-created_at")
-            .first()
-        )
+        """Return the effective subscription for the authenticated reader."""
+        subscription = services.get_effective_subscription(request.user)
         if not subscription:
             return Response(
                 {"detail": "You do not have an active subscription."},
@@ -157,6 +156,18 @@ class SubscribeView(APIView):
         plan = get_object_or_404(SubscriptionPlan, slug=plan_slug, is_active=True)
         reader = request.user
 
+        # Duplicate subscription guard — reject if reader already has an
+        # active or pending subscription to prevent double-charging.
+        existing = Subscription.objects.filter(
+            reader=reader,
+            status__in=[SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING],
+        ).first()
+        if existing:
+            return Response(
+                {"detail": "You already have an active subscription."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         # Determine billing period length
         if plan.billing_period == BillingPeriod.ANNUAL:
             period_days = 365
@@ -168,14 +179,20 @@ class SubscribeView(APIView):
 
         # Free plan — activate immediately, no payment needed
         if plan.price_usd == Decimal("0.00"):
-            subscription = Subscription.objects.create(
-                reader=reader,
-                plan=plan,
-                status=SubscriptionStatus.ACTIVE,
-                started_at=timezone.now(),
-                current_period_start=today,
-                current_period_end=period_end,
-            )
+            try:
+                subscription = Subscription.objects.create(
+                    reader=reader,
+                    plan=plan,
+                    status=SubscriptionStatus.ACTIVE,
+                    started_at=timezone.now(),
+                    current_period_start=today,
+                    current_period_end=period_end,
+                )
+            except IntegrityError:
+                return Response(
+                    {"detail": "You already have an active subscription."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             _invalidate_reader_subscription_cache(reader.id)
             logger.info(
                 "[Subscribe] Free plan activated: reader=%s plan=%s",
@@ -188,14 +205,20 @@ class SubscribeView(APIView):
             )
 
         # Paid plan — create subscription in TRIALING, initiate payment
-        subscription = Subscription.objects.create(
-            reader=reader,
-            plan=plan,
-            status=SubscriptionStatus.TRIALING,
-            started_at=timezone.now(),
-            current_period_start=today,
-            current_period_end=period_end,
-        )
+        try:
+            subscription = Subscription.objects.create(
+                reader=reader,
+                plan=plan,
+                status=SubscriptionStatus.TRIALING,
+                started_at=timezone.now(),
+                current_period_start=today,
+                current_period_end=period_end,
+            )
+        except IntegrityError:
+            return Response(
+                {"detail": "You already have an active subscription."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         reference = f"granite-sub-{subscription.id}"
         paynow    = PaynowClient()
@@ -206,6 +229,7 @@ class SubscribeView(APIView):
                 phone=phone_number,
                 email=reader.email,
                 reference=reference,
+                payment_method=payment_method,
             )
         else:
             result = paynow.initiate_web_payment(
@@ -217,9 +241,8 @@ class SubscribeView(APIView):
         if not result["ok"]:
             subscription.delete()
             logger.warning(
-                "[Subscribe] Paynow payment initiation failed: reader=%s error=%s",
+                "[Subscribe] Paynow payment initiation failed: reader=%s",
                 reader.email,
-                result["error"],
             )
             return Response(
                 {"detail": f"Payment gateway error: {result['error']}"},
@@ -227,17 +250,28 @@ class SubscribeView(APIView):
             )
 
         # Record the payment
-        Payment.objects.create(
-            subscription=subscription,
-            amount_usd=plan.price_usd,
-            currency="USD",
-            payment_method=payment_method,
-            status=PaymentStatus.PENDING,
-            paynow_reference=result["reference"],
-            paynow_poll_url=result["poll_url"],
-            paynow_redirect_url=result["redirect_url"],
-            phone_number=phone_number,
-        )
+        try:
+            Payment.objects.create(
+                subscription=subscription,
+                amount_usd=plan.price_usd,
+                currency="USD",
+                payment_method=payment_method,
+                status=PaymentStatus.PENDING,
+                paynow_reference=result["reference"],
+                paynow_poll_url=result["poll_url"],
+                paynow_redirect_url=result["redirect_url"],
+                phone_number=phone_number,
+            )
+        except IntegrityError:
+            subscription.delete()
+            logger.error(
+                "[Subscribe] Duplicate Paynow reference returned: reader=%s",
+                reader.email,
+            )
+            return Response(
+                {"detail": "Payment gateway error: duplicate payment reference."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         subscription.paynow_reference = result["reference"]
         subscription.save(update_fields=["paynow_reference"])
@@ -245,10 +279,9 @@ class SubscribeView(APIView):
         _invalidate_reader_subscription_cache(reader.id)
 
         logger.info(
-            "[Subscribe] Payment initiated: reader=%s plan=%s ref=%s",
+            "[Subscribe] Payment initiated: reader=%s plan=%s",
             reader.email,
             plan.slug,
-            result["reference"],
         )
 
         response_data = SubscriptionSerializer(subscription).data
@@ -282,16 +315,12 @@ class CancelSubscriptionView(APIView):
 
         cancel_immediately = serializer.validated_data["cancel_immediately"]
 
-        subscription = (
-            Subscription.objects.filter(
-                reader=request.user,
-                status__in=[SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING],
-            )
-            .select_related("plan")
-            .first()
-        )
+        subscription = services.get_effective_subscription(request.user)
 
-        if not subscription:
+        if not subscription or subscription.status not in [
+            SubscriptionStatus.ACTIVE,
+            SubscriptionStatus.TRIALING,
+        ]:
             return Response(
                 {"detail": "No active subscription to cancel."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -360,21 +389,24 @@ class PaynowCallbackView(APIView):
 
     permission_classes     = [AllowAny]
     authentication_classes = []
+    throttle_classes       = [PaynowCallbackThrottle, BurstRateThrottle]
 
     @extend_schema(request=PaynowCallbackSerializer, responses={200: None})
     def post(self, request) -> Response:
         """Accept Paynow payment callback and trigger async processing."""
         serializer = PaynowCallbackSerializer(data=request.data)
         if not serializer.is_valid():
-            logger.warning("[PaynowCallback] Invalid payload: %s", serializer.errors)
-            return Response({"detail": "ok"})  # Always 200 to Paynow
+            logger.warning("[PaynowCallback] Invalid payload rejected.")
+            return Response(
+                {"detail": "Invalid callback payload."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         data      = serializer.validated_data
         reference = data.get("reference", "")
 
         logger.info(
-            "[PaynowCallback] Received: reference=%s status=%s",
-            reference,
+            "[PaynowCallback] Received callback: status=%s",
             data.get("status", ""),
         )
 
@@ -386,7 +418,24 @@ class PaynowCallbackView(APIView):
                 paynow_reference=paynow_ref
             )
         except Payment.DoesNotExist:
-            logger.warning("[PaynowCallback] Payment not found for reference=%s", paynow_ref)
+            logger.warning("[PaynowCallback] Payment not found for callback payload.")
+            return Response({"detail": "ok"})
+        except Payment.MultipleObjectsReturned:
+            logger.error(
+                "[PaynowCallback] Duplicate payment rows found; skipping callback "
+                "processing.",
+            )
+            return Response({"detail": "ok"})
+
+        if payment.status == PaymentStatus.COMPLETED:
+            return Response({"detail": "ok"})
+
+        callback_cache_key = f"subscriptions:paynow_callback:queued:{payment.id}"
+        if not cache.add(callback_cache_key, True, timeout=30):
+            logger.info(
+                "[PaynowCallback] Duplicate callback suppressed for payment=%s",
+                payment.id,
+            )
             return Response({"detail": "ok"})
 
         # Enqueue async processing
@@ -410,6 +459,7 @@ class PaynowPollView(APIView):
 
     authentication_classes = [ReaderJWTAuthentication]
     permission_classes     = [IsAuthenticated, IsReader]
+    throttle_classes       = [PaymentPollThrottle]
 
     def get(self, request, payment_id: str) -> Response:
         """Poll Paynow for payment status and return current state."""
@@ -448,8 +498,22 @@ class PaynowPollView(APIView):
             })
 
         if result["paid"]:
-            _activate_subscription(payment)
-            _invalidate_reader_subscription_cache(request.user.id)
+            services.activate_subscription(
+                str(payment.id),
+                result["amount"],
+                result.get("reference", ""),
+            )
+            # Refresh stale in-memory objects — the service updated them via
+            # a separate locked query.
+            payment.refresh_from_db()
+            if payment.status != PaymentStatus.COMPLETED:
+                # Amount mismatch — service refused activation.
+                return Response({
+                    "paid":   False,
+                    "status": payment.status,
+                    "error":  "Payment amount could not be verified.",
+                })
+            payment.subscription.refresh_from_db()
             return Response({
                 "paid":         True,
                 "status":       PaymentStatus.COMPLETED,
@@ -566,28 +630,6 @@ class RevenueReportView(APIView):
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-def _activate_subscription(payment: Payment) -> None:
-    """
-    Mark *payment* as COMPLETED and activate the linked subscription.
-
-    Called when Paynow confirms payment — either from the poll endpoint
-    or the async task.
-    """
-    payment.status = PaymentStatus.COMPLETED
-    payment.save(update_fields=["status", "updated_at"])
-
-    subscription = payment.subscription
-    subscription.status = SubscriptionStatus.ACTIVE
-    subscription.paynow_reference = payment.paynow_reference
-    subscription.save(update_fields=["status", "paynow_reference", "updated_at"])
-
-    logger.info(
-        "[Activate] Subscription activated: sub=%s payment=%s",
-        subscription.id,
-        payment.id,
-    )
-
 
 def _invalidate_reader_subscription_cache(reader_id) -> None:
     """Remove cached subscription status for *reader_id*."""

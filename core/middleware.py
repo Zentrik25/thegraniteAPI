@@ -1,11 +1,23 @@
 import logging
 import time
 import uuid
+from urllib.parse import parse_qsl, urlencode
 
 from django.conf import settings
 from django.http import JsonResponse
 
 logger = logging.getLogger("core.middleware")
+_SENSITIVE_QUERY_PARAMS = frozenset(
+    {
+        "token",
+        "reference",
+        "paynowreference",
+        "pollurl",
+        "poll_url",
+        "redirecturl",
+        "redirect_url",
+    }
+)
 
 
 class RequestTimingMiddleware:
@@ -23,7 +35,7 @@ class RequestTimingMiddleware:
 
         response["X-Response-Time"] = f"{ms}ms"
 
-        path = request.get_full_path()
+        path = _get_safe_full_path(request)
         if ms >= self.CRITICAL_MS:
             logger.critical("CRITICAL slow request: %s %s — %dms", request.method, path, ms)
         elif ms >= self.ERROR_MS:
@@ -65,7 +77,7 @@ class StructuredLoggingMiddleware:
                     "request_id":  request_id,
                     "method":      request.method,
                     "path":        request.path,
-                    "query":       request.META.get("QUERY_STRING", ""),
+                    "query":       _sanitize_query_string(request.META.get("QUERY_STRING", "")),
                     "status_code": response.status_code,
                     "user_id":     user_id,
                     "ip":          _get_client_ip(request),
@@ -139,3 +151,23 @@ def _get_client_ip(request) -> str:
         if forwarded:
             return forwarded.split(",")[0].strip()
         return request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _sanitize_query_string(raw_query: str) -> str:
+    """Redact sensitive query parameters before they reach logs."""
+    if not raw_query:
+        return ""
+
+    redacted_pairs = []
+    for key, value in parse_qsl(raw_query, keep_blank_values=True):
+        if key.lower() in _SENSITIVE_QUERY_PARAMS:
+            redacted_pairs.append((key, "[REDACTED]"))
+        else:
+            redacted_pairs.append((key, value))
+    return urlencode(redacted_pairs, doseq=True)
+
+
+def _get_safe_full_path(request) -> str:
+    """Return request path with sensitive query params redacted."""
+    safe_query = _sanitize_query_string(request.META.get("QUERY_STRING", ""))
+    return f"{request.path}?{safe_query}" if safe_query else request.path

@@ -439,6 +439,11 @@ class Article(TimeStampedModel):
         if not self.slug:
             self.slug = _unique_slug(Article, self.title, "article", 240, self.pk)
 
+        # 1.1 Defensive normalisation for legacy callers/tests that may still
+        #     pass None for the paywall flag.
+        if self.is_premium is None:
+            self.is_premium = False
+
         # 2. Auto-sync boolean placement flags from their rank fields.
         if self.top_story_rank is not None:
             self.is_top_story = True

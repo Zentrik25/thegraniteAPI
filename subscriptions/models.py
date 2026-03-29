@@ -154,7 +154,8 @@ class Subscription(models.Model):
     A reader's subscription to a plan.
 
     One reader may hold multiple historical subscriptions but only one ACTIVE
-    subscription at a time — enforced at the view layer.
+    or TRIALING subscription at a time — enforced by both the view layer and
+    a conditional database constraint.
 
     paynow_reference stores the transaction reference returned by Paynow so
     that payment disputes can be investigated.
@@ -222,6 +223,15 @@ class Subscription(models.Model):
         indexes = [
             models.Index(fields=["reader", "status"],              name="sub_reader_status_idx"),
             models.Index(fields=["status", "current_period_end"],  name="sub_status_period_end_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reader"],
+                condition=models.Q(
+                    status__in=[SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING]
+                ),
+                name="unique_effective_subscription_per_reader",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -324,6 +334,13 @@ class Payment(models.Model):
             models.Index(fields=["status", "created_at"],       name="payment_status_created_idx"),
             models.Index(fields=["subscription", "status"],     name="payment_sub_status_idx"),
             models.Index(fields=["paynow_reference"],           name="payment_paynow_ref_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["paynow_reference"],
+                condition=~models.Q(paynow_reference=""),
+                name="unique_payment_paynow_reference",
+            ),
         ]
 
     def __str__(self) -> str:

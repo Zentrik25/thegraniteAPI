@@ -3,6 +3,7 @@ tasks.py — Celery tasks for the subscriptions app.
 
 Task inventory:
   check_expired_subscriptions()     — daily: mark overdue ACTIVE subscriptions EXPIRED
+  queue_renewal_reminders()         — daily: enqueue reminder tasks for subscriptions ending soon
   send_renewal_reminder(sub_id)     — email reader 3 days before period end (stub)
   process_paynow_callback(payment_id) — poll Paynow and activate subscription on success
 """
@@ -14,6 +15,21 @@ from celery import shared_task
 from django.core.cache import cache
 
 logger = logging.getLogger("subscriptions.tasks")
+
+
+def _invalidate_subscription_status_cache(reader_ids: list[str]) -> None:
+    """Invalidate cached paywall status for the given reader IDs."""
+    unique_reader_ids = list(dict.fromkeys(str(reader_id) for reader_id in reader_ids if reader_id))
+    if not unique_reader_ids:
+        return
+
+    cache.delete_many(
+        [f"subscriptions:reader:{reader_id}:status" for reader_id in unique_reader_ids]
+    )
+    logger.info(
+        "[subscriptions.tasks] Invalidated subscription cache for %d reader(s).",
+        len(unique_reader_ids),
+    )
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
@@ -30,14 +46,33 @@ def check_expired_subscriptions(self) -> None:
 
     today = date.today()
 
-    # Expire overdue active subscriptions
+    cancel_qs = Subscription.objects.filter(
+        status=SubscriptionStatus.ACTIVE,
+        cancel_at_period_end=True,
+        current_period_end__lt=today,
+    )
+    cancel_reader_ids = list(cancel_qs.values_list("reader_id", flat=True))
+
+    # Process cancel_at_period_end subscriptions FIRST so they land in
+    # CANCELLED rather than EXPIRED — the general sweep below would otherwise
+    # grab them first and mark them EXPIRED before we can distinguish them.
+    cancel_count = cancel_qs.update(status=SubscriptionStatus.CANCELLED)
+    if cancel_count:
+        logger.info(
+            "[check_expired_subscriptions] Finalised %d cancel_at_period_end subscription(s).",
+            cancel_count,
+        )
+
     expired_qs = Subscription.objects.filter(
         status=SubscriptionStatus.ACTIVE,
         current_period_end__lt=today,
     )
-    expired_count = expired_qs.count()
+    expired_reader_ids = list(expired_qs.values_list("reader_id", flat=True))
+
+    # Expire any remaining overdue active subscriptions (those not flagged for
+    # graceful cancellation above).
+    expired_count = expired_qs.update(status=SubscriptionStatus.EXPIRED)
     if expired_count:
-        expired_qs.update(status=SubscriptionStatus.EXPIRED)
         logger.info(
             "[check_expired_subscriptions] Marked %d subscription(s) as EXPIRED.",
             expired_count,
@@ -45,27 +80,38 @@ def check_expired_subscriptions(self) -> None:
     else:
         logger.info("[check_expired_subscriptions] No expired subscriptions found.")
 
-    # Finalise cancel_at_period_end subscriptions whose period has ended
-    from django.utils import timezone as tz
-
-    cancel_qs = Subscription.objects.filter(
-        status=SubscriptionStatus.ACTIVE,
-        cancel_at_period_end=True,
-        current_period_end__lt=today,
-    )
-    cancel_count = cancel_qs.count()
-    if cancel_count:
-        cancel_qs.update(
-            status=SubscriptionStatus.CANCELLED,
-        )
-        logger.info(
-            "[check_expired_subscriptions] Finalised %d cancel_at_period_end subscription(s).",
-            cancel_count,
-        )
-
-    # Invalidate affected reader caches — broad flush for now
-    # (production would target specific reader IDs)
+    _invalidate_subscription_status_cache(cancel_reader_ids + expired_reader_ids)
     logger.info("[check_expired_subscriptions] Task complete.")
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300, ignore_result=True)
+def queue_renewal_reminders(self) -> None:
+    """
+    Enqueue reminder tasks for active subscriptions ending in 3 days.
+
+    This task is designed for daily Celery Beat scheduling. It keeps the
+    existing send_renewal_reminder task stable and only adds the missing
+    batch-selection step.
+    """
+    from subscriptions.models import Subscription, SubscriptionStatus
+
+    target_date = date.today() + timedelta(days=3)
+    subscription_ids = list(
+        Subscription.objects.filter(
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=False,
+            current_period_end=target_date,
+        ).values_list("id", flat=True)
+    )
+
+    for subscription_id in subscription_ids:
+        send_renewal_reminder.delay(str(subscription_id))
+
+    logger.info(
+        "[queue_renewal_reminders] Enqueued %d reminder task(s) for %s.",
+        len(subscription_ids),
+        target_date,
+    )
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=120, ignore_result=True)
@@ -127,7 +173,7 @@ def process_paynow_callback(self, payment_id: str) -> None:
     Args:
         payment_id: UUID string of the Payment record to process.
     """
-    from subscriptions.models import Payment, PaymentStatus, Subscription, SubscriptionStatus
+    from subscriptions.models import Payment, PaymentStatus
     from subscriptions.paynow_client import PaynowClient
 
     try:
@@ -160,37 +206,36 @@ def process_paynow_callback(self, payment_id: str) -> None:
 
     if not result["ok"]:
         logger.error(
-            "[process_paynow_callback] Paynow poll failed: payment=%s error=%s",
+            "[process_paynow_callback] Paynow poll failed: payment=%s",
             payment_id,
-            result["error"],
         )
         raise self.retry(exc=Exception(result["error"]))
 
     if result["paid"]:
-        payment.status = PaymentStatus.COMPLETED
-        payment.save(update_fields=["status", "updated_at"])
-
-        subscription = payment.subscription
-        subscription.status = SubscriptionStatus.ACTIVE
-        subscription.paynow_reference = payment.paynow_reference
-        subscription.save(update_fields=["status", "paynow_reference", "updated_at"])
-
-        # Invalidate cached subscription status for this reader
-        reader_id = subscription.reader_id
-        cache_key  = f"subscriptions:reader:{reader_id}:status"
-        cache.delete(cache_key)
-
-        logger.info(
-            "[process_paynow_callback] Subscription activated: sub=%s payment=%s reader=%s",
-            subscription.id,
+        from subscriptions.services import activate_subscription
+        activated = activate_subscription(
             payment_id,
-            subscription.reader.email,
+            result["amount"],
+            result.get("reference", ""),
         )
+        if activated:
+            logger.info(
+                "[process_paynow_callback] Subscription activated: payment=%s",
+                payment_id,
+            )
+        else:
+            # Either already COMPLETED (idempotent) or amount mismatch (logged
+            # inside the service). Either way, do not retry.
+            logger.info(
+                "[process_paynow_callback] Activation skipped for payment=%s "
+                "(already done or amount mismatch).",
+                payment_id,
+            )
     else:
         logger.info(
             "[process_paynow_callback] Payment %s not yet confirmed by Paynow (status=%s).",
             payment_id,
             result.get("status", "unknown"),
         )
-        # Retry — Paynow may confirm within the next poll window
+        # Retry — Paynow may confirm within the next poll window.
         raise self.retry(exc=Exception("Payment not yet confirmed."))

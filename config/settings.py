@@ -3,7 +3,11 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
+from django.core.exceptions import ImproperlyConfigured
+
 _TESTING = "test" in sys.argv
+_INSECURE_SECRET_KEY = "django-insecure-change-me-in-production"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -11,6 +15,21 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_production_runtime(debug: bool, testing: bool) -> bool:
+    """Return True only for non-debug, non-test runtime."""
+    return not debug and not testing
+
+
+def _validate_security_settings(*, debug: bool, testing: bool, secret_key: str) -> None:
+    """Fail fast when production would boot with an unsafe secret key."""
+    if _is_production_runtime(debug, testing) and (
+        not secret_key or secret_key == _INSECURE_SECRET_KEY
+    ):
+        raise ImproperlyConfigured(
+            "SECRET_KEY must be set to a non-default value when DEBUG=False."
+        )
 
 # Load .env file before anything else
 _env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -26,7 +45,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get(
     "SECRET_KEY",
-    "django-insecure-change-me-in-production",
+    _INSECURE_SECRET_KEY,
 )
 
 ALLOWED_HOSTS = [
@@ -36,6 +55,8 @@ ALLOWED_HOSTS = [
 ]
 
 DEBUG = _env_flag("DEBUG", default=False)
+_PRODUCTION = _is_production_runtime(DEBUG, _TESTING)
+_validate_security_settings(debug=DEBUG, testing=_TESTING, secret_key=SECRET_KEY)
 
 MAINTENANCE_MODE = _env_flag("MAINTENANCE_MODE", default=False)
 
@@ -204,6 +225,24 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Security defaults — strict in production, relaxed in dev/test.
+SECURE_SSL_REDIRECT = _env_flag("SECURE_SSL_REDIRECT", default=_PRODUCTION)
+SESSION_COOKIE_SECURE = _env_flag("SESSION_COOKIE_SECURE", default=_PRODUCTION)
+CSRF_COOKIE_SECURE = _env_flag("CSRF_COOKIE_SECURE", default=_PRODUCTION)
+SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
+CSRF_COOKIE_SAMESITE = os.environ.get("CSRF_COOKIE_SAMESITE", "Lax")
+SECURE_HSTS_SECONDS = int(
+    os.environ.get("SECURE_HSTS_SECONDS", "31536000" if _PRODUCTION else "0")
+)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_flag(
+    "SECURE_HSTS_INCLUDE_SUBDOMAINS",
+    default=bool(_PRODUCTION and SECURE_HSTS_SECONDS),
+)
+SECURE_HSTS_PRELOAD = _env_flag("SECURE_HSTS_PRELOAD", default=False)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+X_FRAME_OPTIONS = "DENY"
+
 # CORS
 _CORS_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 if _CORS_ORIGINS:
@@ -306,6 +345,18 @@ CELERY_BROKER_URL            = "memory://" if _TESTING else os.environ.get("REDI
 CELERY_RESULT_BACKEND        = "cache+memory://"
 CELERY_TASK_ALWAYS_EAGER     = True
 CELERY_TASK_EAGER_PROPAGATES = False
+CELERY_TIMEZONE              = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    # Passive unless celery beat is running; safe in dev, required in production.
+    "subscriptions-check-expired-daily": {
+        "task": "subscriptions.tasks.check_expired_subscriptions",
+        "schedule": crontab(hour=0, minute=10),
+    },
+    "subscriptions-queue-renewal-reminders-daily": {
+        "task": "subscriptions.tasks.queue_renewal_reminders",
+        "schedule": crontab(hour=8, minute=0),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Cloudflare CDN
@@ -349,7 +400,31 @@ CLOUDFLARE_ZONE_ID   = os.environ.get("CLOUDFLARE_ZONE_ID",   "")
 CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
 
 # Canonical public URL used when building absolute URLs for cache purge
-SITE_URL = os.environ.get("SITE_URL", "https://thegranite.co.zw")
+SITE_URL = os.environ.get("SITE_URL", "https://thegranite.co.zw").rstrip("/")
+FRONTEND_URL = os.environ.get(
+    "FRONTEND_URL",
+    "http://localhost:3000" if DEBUG else SITE_URL,
+).rstrip("/")
+
+# Email delivery
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND",
+    (
+        "django.core.mail.backends.locmem.EmailBackend"
+        if _TESTING else
+        "django.core.mail.backends.console.EmailBackend"
+        if DEBUG else
+        "django.core.mail.backends.smtp.EmailBackend"
+    ),
+)
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@thegranite.co.zw")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "25"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = _env_flag("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = _env_flag("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 
 # ---------------------------------------------------------------------------
 # Paynow Zimbabwe payment gateway

@@ -12,6 +12,7 @@ Serializer inventory:
 """
 
 from decimal import Decimal
+from urllib.parse import urlparse
 
 from rest_framework import serializers
 
@@ -196,7 +197,7 @@ class PaynowCallbackSerializer(serializers.Serializer):
     we act on are declared here; extras are silently ignored.
     """
 
-    reference = serializers.CharField(max_length=100)
+    reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
     paynowreference = serializers.CharField(max_length=100, required=False, allow_blank=True)
     status    = serializers.CharField(max_length=50)
     pollurl   = serializers.CharField(max_length=500, required=False, allow_blank=True)
@@ -206,6 +207,38 @@ class PaynowCallbackSerializer(serializers.Serializer):
         required=False,
         default=Decimal("0.00"),
     )
+
+    def validate(self, attrs: dict) -> dict:
+        """Reject malformed callback bodies before they reach task dispatch."""
+        reference = (attrs.get("reference") or "").strip()
+        paynowreference = (attrs.get("paynowreference") or "").strip()
+        status_value = (attrs.get("status") or "").strip()
+        pollurl = (attrs.get("pollurl") or "").strip()
+        amount = attrs.get("amount", Decimal("0.00"))
+
+        if not reference and not paynowreference:
+            raise serializers.ValidationError(
+                {"reference": "reference or paynowreference is required."}
+            )
+
+        if not status_value:
+            raise serializers.ValidationError({"status": "This field may not be blank."})
+
+        if amount < 0:
+            raise serializers.ValidationError({"amount": "Amount cannot be negative."})
+
+        if pollurl:
+            parsed = urlparse(pollurl)
+            if parsed.scheme != "https" or not parsed.netloc.endswith("paynow.co.zw"):
+                raise serializers.ValidationError(
+                    {"pollurl": "Must be a valid Paynow poll URL."}
+                )
+
+        attrs["reference"] = reference
+        attrs["paynowreference"] = paynowreference
+        attrs["status"] = status_value
+        attrs["pollurl"] = pollurl
+        return attrs
 
 
 # ---------------------------------------------------------------------------

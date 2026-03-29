@@ -21,6 +21,9 @@ from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+from django.conf import settings
+from django.core.cache import cache, caches
+from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone as django_tz
@@ -222,6 +225,12 @@ class PaywallMiddlewareTests(TestCase):
         response = self.client.get(self._article_url(article.slug))
         self.assertEqual(response.status_code, 402)
 
+    def test_premium_article_head_returns_402_unauthenticated(self) -> None:
+        """HEAD requests must not bypass the premium article paywall."""
+        article = _make_article(self.staff_user, title="Premium Head Article", is_premium=True)
+        response = self.client.head(self._article_url(article.slug))
+        self.assertEqual(response.status_code, 402)
+
     def test_premium_article_returns_402_for_free_plan_reader(self) -> None:
         """Premium article returns 402 for reader on FREE_ONLY plan."""
         _make_active_subscription(self.reader, self.free_plan)
@@ -370,6 +379,44 @@ class SubscribeViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
         self.assertEqual(Subscription.objects.count(), before_count)
 
+    @patch("subscriptions.views.PaynowClient")
+    def test_subscribe_logs_do_not_expose_payment_reference_or_urls(
+        self, mock_paynow_cls: MagicMock
+    ) -> None:
+        """Subscription initiation logs must not leak references or Paynow URLs."""
+        secret_reference = "PAYNOW-SECRET-REF-001"
+        secret_poll_url = "https://www.paynow.co.zw/interface/CheckPayment/?guid=secret-guid"
+        secret_redirect_url = "https://www.paynow.co.zw/interface/initiatetransaction/?secret=1"
+
+        mock_client = MagicMock()
+        mock_client.initiate_mobile_payment.return_value = {
+            "ok":           True,
+            "reference":    secret_reference,
+            "poll_url":     secret_poll_url,
+            "redirect_url": secret_redirect_url,
+            "error":        "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        headers = _reader_auth_headers(self.reader)
+        with self.assertLogs("subscriptions.views", level="INFO") as captured:
+            response = self.client.post(
+                "/api/v1/subscriptions/subscribe/",
+                {
+                    "plan_slug":      "premium",
+                    "payment_method": PaymentMethod.ECOCASH,
+                    "phone_number":   "0771234567",
+                },
+                format="json",
+                **headers,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        output = "\n".join(captured.output)
+        self.assertNotIn(secret_reference, output)
+        self.assertNotIn(secret_poll_url, output)
+        self.assertNotIn(secret_redirect_url, output)
+
     def test_subscribe_requires_reader_auth(self) -> None:
         """Unauthenticated requests are rejected."""
         response = self.client.post(
@@ -392,6 +439,46 @@ class SubscribeViewTests(TestCase):
 
 
 # ---------------------------------------------------------------------------
+# My subscription
+# ---------------------------------------------------------------------------
+
+class MySubscriptionSelectionTests(TestCase):
+    """GET /api/v1/subscriptions/my-subscription/ returns the effective row."""
+
+    def setUp(self) -> None:
+        self.client       = APIClient()
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    def test_my_subscription_returns_effective_active_subscription_not_newest_row(self) -> None:
+        """Newest historical rows must not hide the reader's real active subscription."""
+        today = date.today()
+        active_subscription = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=django_tz.now() - timedelta(days=10),
+            current_period_start=today - timedelta(days=10),
+            current_period_end=today + timedelta(days=20),
+        )
+        Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.CANCELLED,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+            cancelled_at=django_tz.now(),
+        )
+
+        headers = _reader_auth_headers(self.reader)
+        response = self.client.get("/api/v1/subscriptions/my-subscription/", **headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], str(active_subscription.id))
+
+
+# ---------------------------------------------------------------------------
 # Paynow callback
 # ---------------------------------------------------------------------------
 
@@ -402,6 +489,7 @@ class PaynowCallbackTests(TestCase):
         self.client       = APIClient()
         self.reader       = _make_reader()
         self.premium_plan = _make_premium_plan()
+        caches["throttle"].clear()
         today = date.today()
         self.subscription = Subscription.objects.create(
             reader=self.reader,
@@ -438,6 +526,62 @@ class PaynowCallbackTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         mock_task.delay.assert_called_once_with(str(self.payment.id))
 
+    @patch("subscriptions.views.process_paynow_callback")
+    def test_malformed_callback_rejected(self, mock_task: MagicMock) -> None:
+        """Malformed callback bodies should be rejected before task dispatch."""
+        response = self.client.post(
+            "/api/v1/subscriptions/paynow-callback/",
+            {
+                "status": "Paid",
+                "pollurl": "https://www.paynow.co.zw/interface/CheckPayment/?guid=test",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.json()["detail"], "Invalid callback payload.")
+        mock_task.delay.assert_not_called()
+
+    @patch("subscriptions.views.process_paynow_callback")
+    def test_callback_logs_do_not_expose_payment_references(self, mock_task: MagicMock) -> None:
+        """Callback logs must not contain raw Paynow or merchant references."""
+        with self.assertLogs("subscriptions.views", level="INFO") as captured:
+            response = self.client.post(
+                "/api/v1/subscriptions/paynow-callback/",
+                {
+                    "reference":       "granite-sub-secret",
+                    "paynowreference": self.payment.paynow_reference,
+                    "status":          "Paid",
+                    "pollurl":         "https://www.paynow.co.zw/interface/CheckPayment/?guid=secret",
+                    "amount":          "2.00",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(mock_task.delay.called)
+        output = "\n".join(captured.output)
+        self.assertNotIn("granite-sub-secret", output)
+        self.assertNotIn(self.payment.paynow_reference, output)
+
+    @patch("subscriptions.views.process_paynow_callback")
+    def test_duplicate_callback_is_suppressed_before_worker_enqueue(
+        self, mock_task: MagicMock
+    ) -> None:
+        """Repeated valid callbacks should not enqueue duplicate worker jobs."""
+        payload = {
+            "reference":       "granite-sub-test",
+            "paynowreference": self.payment.paynow_reference,
+            "status":          "Paid",
+            "pollurl":         "https://www.paynow.co.zw/interface/CheckPayment/?guid=test",
+            "amount":          "2.00",
+        }
+
+        first = self.client.post("/api/v1/subscriptions/paynow-callback/", payload)
+        second = self.client.post("/api/v1/subscriptions/paynow-callback/", payload)
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        mock_task.delay.assert_called_once_with(str(self.payment.id))
+
     @patch("subscriptions.paynow_client.PaynowClient")
     def test_process_callback_activates_subscription(self, mock_paynow_cls: MagicMock) -> None:
         """process_paynow_callback task activates subscription when payment confirmed."""
@@ -461,6 +605,160 @@ class PaynowCallbackTests(TestCase):
 
         self.assertEqual(self.payment.status, PaymentStatus.COMPLETED)
         self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
+
+    @patch("subscriptions.paynow_client.PaynowClient")
+    def test_repeated_callback_processing_is_harmless(self, mock_paynow_cls: MagicMock) -> None:
+        """A second callback run is a no-op once the payment is already completed."""
+        from subscriptions.tasks import process_paynow_callback as task
+
+        mock_client = MagicMock()
+        mock_client.check_payment_status.return_value = {
+            "ok":        True,
+            "paid":      True,
+            "reference": "PAYNOW-TEST-001",
+            "amount":    2.00,
+            "status":    "Paid",
+            "error":     "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        task(str(self.payment.id))
+        task(str(self.payment.id))
+
+        self.payment.refresh_from_db()
+        self.subscription.refresh_from_db()
+
+        self.assertEqual(self.payment.status, PaymentStatus.COMPLETED)
+        self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
+        self.assertEqual(mock_client.check_payment_status.call_count, 1)
+
+
+# ---------------------------------------------------------------------------
+# Paynow poll
+# ---------------------------------------------------------------------------
+
+class PaynowPollViewTests(TestCase):
+    """GET /api/v1/subscriptions/paynow-poll/<payment-id>/"""
+
+    def setUp(self) -> None:
+        self.client       = APIClient()
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+        caches["throttle"].clear()
+        today = date.today()
+        self.subscription = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.TRIALING,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+            paynow_reference="PAYNOW-POLL-001",
+        )
+        self.payment = Payment.objects.create(
+            subscription=self.subscription,
+            amount_usd=Decimal("2.00"),
+            currency="USD",
+            payment_method=PaymentMethod.ECOCASH,
+            status=PaymentStatus.PENDING,
+            paynow_reference="PAYNOW-POLL-001",
+            paynow_poll_url="https://www.paynow.co.zw/interface/CheckPayment/?guid=poll",
+        )
+        self.headers = _reader_auth_headers(self.reader)
+
+    @patch("subscriptions.views.PaynowClient")
+    def test_poll_amount_mismatch_rejects_activation(self, mock_paynow_cls: MagicMock) -> None:
+        """Poll path must not activate access when Paynow reports the wrong amount."""
+        mock_client = MagicMock()
+        mock_client.check_payment_status.return_value = {
+            "ok":        True,
+            "paid":      True,
+            "reference": "PAYNOW-POLL-001",
+            "amount":    0.50,
+            "status":    "Paid",
+            "error":     "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        response = self.client.get(
+            f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["paid"], False)
+        self.assertEqual(response.json()["status"], PaymentStatus.PENDING)
+        self.assertIn("error", response.json())
+
+        self.payment.refresh_from_db()
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.PENDING)
+        self.assertEqual(self.subscription.status, SubscriptionStatus.TRIALING)
+
+    @patch("subscriptions.views.PaynowClient")
+    def test_poll_endpoint_is_throttled(self, mock_paynow_cls: MagicMock) -> None:
+        """Poll endpoint should rate-limit repeated checks for the same payment."""
+        from subscriptions.throttling import PaymentPollThrottle
+
+        mock_client = MagicMock()
+        mock_client.check_payment_status.return_value = {
+            "ok":        True,
+            "paid":      False,
+            "reference": "PAYNOW-POLL-001",
+            "amount":    2.00,
+            "status":    "Sent",
+            "error":     "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        with patch.object(PaymentPollThrottle, "rate", "2/min"):
+            first = self.client.get(
+                f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+                **self.headers,
+            )
+            second = self.client.get(
+                f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+                **self.headers,
+            )
+            third = self.client.get(
+                f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+                **self.headers,
+            )
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    @patch("subscriptions.paynow_client.PaynowClient")
+    def test_poll_after_callback_processing_returns_completed_without_reactivation(
+        self, mock_paynow_cls: MagicMock
+    ) -> None:
+        """Overlapping callback then poll processing should only activate once."""
+        from subscriptions.tasks import process_paynow_callback as task
+
+        mock_client = MagicMock()
+        mock_client.check_payment_status.return_value = {
+            "ok":        True,
+            "paid":      True,
+            "reference": "PAYNOW-POLL-001",
+            "amount":    2.00,
+            "status":    "Paid",
+            "error":     "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        task(str(self.payment.id))
+
+        with patch("subscriptions.views.services.activate_subscription") as mock_activate:
+            response = self.client.get(
+                f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+                **self.headers,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["paid"], True)
+        self.assertEqual(response.json()["status"], PaymentStatus.COMPLETED)
+        mock_activate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +911,28 @@ class ExpiredSubscriptionTaskTests(TestCase):
         sub.refresh_from_db()
         self.assertEqual(sub.status, SubscriptionStatus.ACTIVE)
 
+    def test_expiry_task_invalidates_reader_cache(self) -> None:
+        """Expiring a subscription must evict cached paywall access for that reader."""
+        from subscriptions.tasks import check_expired_subscriptions
+
+        yesterday = date.today() - timedelta(days=1)
+        sub = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=django_tz.now(),
+            current_period_start=yesterday - timedelta(days=29),
+            current_period_end=yesterday,
+        )
+        cache_key = f"subscriptions:reader:{self.reader.id}:status"
+        cache.set(cache_key, True, 300)
+
+        check_expired_subscriptions()
+
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, SubscriptionStatus.EXPIRED)
+        self.assertIsNone(cache.get(cache_key))
+
 
 # ---------------------------------------------------------------------------
 # Cancel
@@ -665,3 +985,477 @@ class CancelSubscriptionTests(TestCase):
             **headers,
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# Payment safety — services.activate_subscription
+# ---------------------------------------------------------------------------
+
+class ActivationServiceTests(TestCase):
+    """
+    Unit tests for subscriptions.services.activate_subscription.
+
+    Covers idempotency, amount verification, and atomicity.
+    """
+
+    def setUp(self) -> None:
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+        today = date.today()
+        self.subscription = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.TRIALING,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+            paynow_reference="PAYNOW-SVC-001",
+        )
+        self.payment = Payment.objects.create(
+            subscription=self.subscription,
+            amount_usd=Decimal("2.00"),
+            currency="USD",
+            payment_method=PaymentMethod.ECOCASH,
+            status=PaymentStatus.PENDING,
+            paynow_reference="PAYNOW-SVC-001",
+            paynow_poll_url="https://www.paynow.co.zw/interface/CheckPayment/?guid=svc",
+        )
+
+    def test_activation_sets_payment_completed_and_subscription_active(self) -> None:
+        """Service sets payment COMPLETED and subscription ACTIVE in one call."""
+        from subscriptions.services import activate_subscription
+        result = activate_subscription(str(self.payment.id), 2.00)
+        self.assertTrue(result)
+        self.payment.refresh_from_db()
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.COMPLETED)
+        self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
+
+    def test_activation_is_idempotent(self) -> None:
+        """Calling activate_subscription twice returns False on the second call."""
+        from subscriptions.services import activate_subscription
+        first  = activate_subscription(str(self.payment.id), 2.00)
+        second = activate_subscription(str(self.payment.id), 2.00)
+        self.assertTrue(first)
+        self.assertFalse(second)
+        # Subscription is still ACTIVE — not accidentally reset.
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
+
+    def test_activation_rejected_on_amount_mismatch(self) -> None:
+        """Service refuses activation when reported amount differs by more than $0.01."""
+        from subscriptions.services import activate_subscription
+        result = activate_subscription(str(self.payment.id), 0.50)  # expected $2.00
+        self.assertFalse(result)
+        self.payment.refresh_from_db()
+        self.subscription.refresh_from_db()
+        # Nothing should have changed.
+        self.assertEqual(self.payment.status, PaymentStatus.PENDING)
+        self.assertEqual(self.subscription.status, SubscriptionStatus.TRIALING)
+
+    def test_activation_accepts_amount_within_tolerance(self) -> None:
+        """Service accepts reported amounts within the ±$0.01 tolerance band."""
+        from subscriptions.services import activate_subscription
+        result = activate_subscription(str(self.payment.id), 2.009)  # within $0.01
+        self.assertTrue(result)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, PaymentStatus.COMPLETED)
+
+
+# ---------------------------------------------------------------------------
+# Payment safety — DB integrity constraints
+# ---------------------------------------------------------------------------
+
+class PaymentIntegrityConstraintTests(TestCase):
+    """Model-level integrity guards for duplicate subscriptions and references."""
+
+    def setUp(self) -> None:
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    def test_reader_cannot_have_two_effective_subscriptions(self) -> None:
+        """DB constraint blocks a second ACTIVE/TRIALING subscription for the same reader."""
+        today = date.today()
+        Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+        )
+
+        with self.assertRaises(IntegrityError):
+            Subscription.objects.create(
+                reader=self.reader,
+                plan=self.premium_plan,
+                status=SubscriptionStatus.TRIALING,
+                started_at=django_tz.now(),
+                current_period_start=today,
+                current_period_end=today + timedelta(days=30),
+            )
+
+    def test_paynow_reference_must_be_unique_when_present(self) -> None:
+        """DB constraint blocks duplicate non-blank Paynow references."""
+        today = date.today()
+        subscription = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.TRIALING,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+        )
+        Payment.objects.create(
+            subscription=subscription,
+            amount_usd=Decimal("2.00"),
+            currency="USD",
+            payment_method=PaymentMethod.ECOCASH,
+            status=PaymentStatus.PENDING,
+            paynow_reference="PAYNOW-DUP-001",
+            paynow_poll_url="https://www.paynow.co.zw/interface/CheckPayment/?guid=dup1",
+        )
+
+        with self.assertRaises(IntegrityError):
+            Payment.objects.create(
+                subscription=subscription,
+                amount_usd=Decimal("2.00"),
+                currency="USD",
+                payment_method=PaymentMethod.ECOCASH,
+                status=PaymentStatus.PENDING,
+                paynow_reference="PAYNOW-DUP-001",
+                paynow_poll_url="https://www.paynow.co.zw/interface/CheckPayment/?guid=dup2",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Payment safety — duplicate subscription guard
+# ---------------------------------------------------------------------------
+
+class DuplicateSubscriptionGuardTests(TestCase):
+    """
+    POST /api/v1/subscriptions/subscribe/ must reject if reader already has
+    an ACTIVE or TRIALING subscription.
+    """
+
+    def setUp(self) -> None:
+        self.client       = APIClient()
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    def test_duplicate_active_subscription_returns_409(self) -> None:
+        """A second subscribe attempt while ACTIVE returns 409 Conflict."""
+        _make_active_subscription(self.reader, self.premium_plan)
+        headers = _reader_auth_headers(self.reader)
+        response = self.client.post(
+            "/api/v1/subscriptions/subscribe/",
+            {"plan_slug": "free", "payment_method": PaymentMethod.BANK_CARD},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+
+    def test_duplicate_trialing_subscription_returns_409(self) -> None:
+        """A second subscribe attempt while a TRIALING sub exists returns 409."""
+        today = date.today()
+        Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.TRIALING,
+            started_at=django_tz.now(),
+            current_period_start=today,
+            current_period_end=today + timedelta(days=30),
+        )
+        headers = _reader_auth_headers(self.reader)
+        response = self.client.post(
+            "/api/v1/subscriptions/subscribe/",
+            {"plan_slug": "free", "payment_method": PaymentMethod.BANK_CARD},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+
+    def test_expired_subscription_allows_new_subscribe(self) -> None:
+        """An EXPIRED subscription does not block a new subscribe attempt."""
+        yesterday = date.today() - timedelta(days=1)
+        Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.EXPIRED,
+            started_at=django_tz.now(),
+            current_period_start=yesterday - timedelta(days=30),
+            current_period_end=yesterday,
+        )
+        headers = _reader_auth_headers(self.reader)
+        response = self.client.post(
+            "/api/v1/subscriptions/subscribe/",
+            {"plan_slug": "free", "payment_method": PaymentMethod.BANK_CARD},
+            format="json",
+            **headers,
+        )
+        # Free plan activates immediately — must not be 409.
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# Payment safety — OneMoney provider
+# ---------------------------------------------------------------------------
+
+class OneMoneyProviderTests(TestCase):
+    """
+    EcoCash and OneMoney subscriptions must use distinct Paynow provider strings.
+    """
+
+    def setUp(self) -> None:
+        self.client       = APIClient()
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    @patch("subscriptions.views.PaynowClient")
+    def test_onemoney_uses_onemoney_provider(self, mock_paynow_cls: MagicMock) -> None:
+        """OneMoney payment passes 'onemoney' as provider to Paynow SDK."""
+        mock_client = MagicMock()
+        mock_client.initiate_mobile_payment.return_value = {
+            "ok": True,
+            "reference": "PAYNOW-OM-001",
+            "poll_url": "https://www.paynow.co.zw/interface/CheckPayment/?guid=om",
+            "redirect_url": "",
+            "error": "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        headers = _reader_auth_headers(self.reader)
+        self.client.post(
+            "/api/v1/subscriptions/subscribe/",
+            {
+                "plan_slug":      "premium",
+                "payment_method": PaymentMethod.ONEMONEY,
+                "phone_number":   "0731234567",
+            },
+            format="json",
+            **headers,
+        )
+
+        # Confirm the service layer passed ONEMONEY down to the client.
+        mock_client.initiate_mobile_payment.assert_called_once()
+        call_kwargs = mock_client.initiate_mobile_payment.call_args
+        passed_method = call_kwargs.kwargs.get(
+            "payment_method",
+            call_kwargs.args[4] if len(call_kwargs.args) > 4 else None,
+        )
+        self.assertEqual(passed_method.upper(), PaymentMethod.ONEMONEY.upper())
+
+    def _make_paynow_client_with_mock_sdk(self) -> tuple:
+        """
+        Construct a PaynowClient without invoking __init__ (which imports the
+        ``paynow`` package that is not installed in the test environment) and
+        inject a mock SDK instance.  Returns (client, mock_sdk).
+        """
+        from subscriptions.paynow_client import PaynowClient
+
+        mock_sdk = MagicMock()
+        mock_sdk.create_payment.return_value = MagicMock()
+        mock_sdk.send_mobile.return_value = MagicMock(
+            success=True, paynow_reference="REF", poll_url="https://paynow/poll"
+        )
+        client = PaynowClient.__new__(PaynowClient)
+        client._paynow = mock_sdk
+        return client, mock_sdk
+
+    def test_paynow_client_passes_onemoney_string_to_sdk(self) -> None:
+        """PaynowClient.initiate_mobile_payment sends 'onemoney' to the SDK."""
+        client, mock_sdk = self._make_paynow_client_with_mock_sdk()
+        client.initiate_mobile_payment(
+            amount_usd=2.00,
+            phone="0731234567",
+            email="reader@test.com",
+            reference="sub-test",
+            payment_method="ONEMONEY",
+        )
+        call_args = mock_sdk.send_mobile.call_args
+        provider_arg = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("method")
+        self.assertEqual(provider_arg, "onemoney")
+
+    def test_paynow_client_passes_ecocash_string_to_sdk(self) -> None:
+        """PaynowClient.initiate_mobile_payment sends 'ecocash' for EcoCash."""
+        client, mock_sdk = self._make_paynow_client_with_mock_sdk()
+        client.initiate_mobile_payment(
+            amount_usd=2.00,
+            phone="0771234567",
+            email="reader@test.com",
+            reference="sub-test",
+            payment_method="ECOCASH",
+        )
+        call_args = mock_sdk.send_mobile.call_args
+        provider_arg = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("method")
+        self.assertEqual(provider_arg, "ecocash")
+
+    def test_paynow_client_poll_logs_do_not_expose_poll_url_or_reference(self) -> None:
+        """Client polling logs must not contain the raw poll URL or reference."""
+        client, mock_sdk = self._make_paynow_client_with_mock_sdk()
+        mock_sdk.check_transaction_status.return_value = MagicMock(
+            paid=True,
+            paynow_reference="PAYNOW-POLL-SECRET",
+            amount=2.00,
+            status="Paid",
+        )
+        secret_poll_url = "https://www.paynow.co.zw/interface/CheckPayment/?guid=secret-guid"
+
+        with self.assertLogs("subscriptions.paynow_client", level="INFO") as captured:
+            result = client.check_payment_status(secret_poll_url)
+
+        self.assertTrue(result["ok"])
+        output = "\n".join(captured.output)
+        self.assertNotIn(secret_poll_url, output)
+        self.assertNotIn("PAYNOW-POLL-SECRET", output)
+
+
+# ---------------------------------------------------------------------------
+# Payment safety — cancel_at_period_end ordering fix
+# ---------------------------------------------------------------------------
+
+class CancelAtPeriodEndTaskTests(TestCase):
+    """
+    check_expired_subscriptions must finalise cancel_at_period_end subscriptions
+    as CANCELLED, not EXPIRED.
+    """
+
+    def setUp(self) -> None:
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    def test_cancel_at_period_end_finalised_as_cancelled(self) -> None:
+        """Subscriptions with cancel_at_period_end=True end up CANCELLED not EXPIRED."""
+        from subscriptions.tasks import check_expired_subscriptions
+
+        yesterday = date.today() - timedelta(days=1)
+        sub = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            started_at=django_tz.now(),
+            current_period_start=yesterday - timedelta(days=30),
+            current_period_end=yesterday,
+        )
+
+        check_expired_subscriptions()
+
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, SubscriptionStatus.CANCELLED)
+
+    def test_ordinary_expired_not_affected_by_cancel_branch(self) -> None:
+        """Subscriptions without cancel_at_period_end are still marked EXPIRED."""
+        from subscriptions.tasks import check_expired_subscriptions
+
+        yesterday = date.today() - timedelta(days=1)
+        sub = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=False,
+            started_at=django_tz.now(),
+            current_period_start=yesterday - timedelta(days=30),
+            current_period_end=yesterday,
+        )
+
+        check_expired_subscriptions()
+
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, SubscriptionStatus.EXPIRED)
+
+    def test_cancel_at_period_end_finalisation_invalidates_reader_cache(self) -> None:
+        """Finalising a period-end cancellation must evict cached paywall access."""
+        from subscriptions.tasks import check_expired_subscriptions
+
+        yesterday = date.today() - timedelta(days=1)
+        sub = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            started_at=django_tz.now(),
+            current_period_start=yesterday - timedelta(days=30),
+            current_period_end=yesterday,
+        )
+        cache_key = f"subscriptions:reader:{self.reader.id}:status"
+        cache.set(cache_key, True, 300)
+
+        check_expired_subscriptions()
+
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, SubscriptionStatus.CANCELLED)
+        self.assertIsNone(cache.get(cache_key))
+
+
+# ---------------------------------------------------------------------------
+# Renewal reminder scheduling
+# ---------------------------------------------------------------------------
+
+class RenewalReminderQueueTests(TestCase):
+    """queue_renewal_reminders should enqueue only due active subscriptions."""
+
+    def setUp(self) -> None:
+        self.reader       = _make_reader()
+        self.premium_plan = _make_premium_plan()
+
+    @patch("subscriptions.tasks.send_renewal_reminder")
+    def test_queue_renewal_reminders_enqueues_only_due_active_subscriptions(
+        self, mock_reminder_task: MagicMock
+    ) -> None:
+        """Only ACTIVE, non-cancelling subscriptions ending in 3 days are queued."""
+        from subscriptions.tasks import queue_renewal_reminders
+
+        target_date = date.today() + timedelta(days=3)
+        eligible = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=django_tz.now(),
+            current_period_start=date.today() - timedelta(days=27),
+            current_period_end=target_date,
+        )
+        Subscription.objects.create(
+            reader=_make_reader("cancel@test.com", "cancelreader"),
+            plan=self.premium_plan,
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            started_at=django_tz.now(),
+            current_period_start=date.today() - timedelta(days=27),
+            current_period_end=target_date,
+        )
+        Subscription.objects.create(
+            reader=_make_reader("expired@test.com", "expiredreader"),
+            plan=self.premium_plan,
+            status=SubscriptionStatus.EXPIRED,
+            started_at=django_tz.now(),
+            current_period_start=date.today() - timedelta(days=30),
+            current_period_end=target_date,
+        )
+
+        queue_renewal_reminders()
+
+        mock_reminder_task.delay.assert_called_once_with(str(eligible.id))
+
+
+# ---------------------------------------------------------------------------
+# Scheduler configuration
+# ---------------------------------------------------------------------------
+
+class SubscriptionLifecycleScheduleTests(TestCase):
+    """Subscription lifecycle tasks must be present in Celery Beat config."""
+
+    def test_celery_beat_schedule_includes_subscription_lifecycle_tasks(self) -> None:
+        """Beat config includes expiry and renewal reminder tasks."""
+        schedule = settings.CELERY_BEAT_SCHEDULE
+
+        self.assertIn("subscriptions-check-expired-daily", schedule)
+        self.assertEqual(
+            schedule["subscriptions-check-expired-daily"]["task"],
+            "subscriptions.tasks.check_expired_subscriptions",
+        )
+        self.assertIn("subscriptions-queue-renewal-reminders-daily", schedule)
+        self.assertEqual(
+            schedule["subscriptions-queue-renewal-reminders-daily"]["task"],
+            "subscriptions.tasks.queue_renewal_reminders",
+        )

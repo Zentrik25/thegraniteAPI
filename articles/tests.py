@@ -122,6 +122,15 @@ class PublishedAtTests(TestCase):
         a.refresh_from_db()
         self.assertEqual(a.published_at, stamp)
 
+    def test_is_premium_defaults_false_when_omitted(self):
+        a = make_article(self.user)
+        self.assertFalse(a.is_premium)
+
+    def test_is_premium_none_is_normalised_to_false(self):
+        a = make_article(self.user, is_premium=None)
+        a.refresh_from_db()
+        self.assertFalse(a.is_premium)
+
 
 # ---------------------------------------------------------------------------
 # Model — top story rank

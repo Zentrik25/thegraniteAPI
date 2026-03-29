@@ -19,8 +19,9 @@ import uuid
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.cache import caches
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -231,6 +232,59 @@ class EmailVerificationTests(APITestCase):
             f"?token={self.reader.email_verification_token}"
         )
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="noreply@test.com",
+    FRONTEND_URL="http://frontend.test",
+)
+class AccountEmailTaskTests(TestCase):
+
+    def setUp(self):
+        self.reader = make_reader(
+            email="taskreader@example.com",
+            username="taskreader",
+            verified=False,
+        )
+
+    def test_send_verification_email_builds_frontend_url_and_does_not_log_token(self):
+        from .tasks import send_verification_email
+
+        token = str(self.reader.email_verification_token)
+        with self.assertLogs("accounts.tasks", level="INFO") as captured:
+            send_verification_email(str(self.reader.id))
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["taskreader@example.com"])
+        self.assertIn("Verify your Granite Post account", mail.outbox[0].subject)
+        self.assertIn(
+            f"http://frontend.test/verify-email?token={token}",
+            mail.outbox[0].body,
+        )
+        self.assertNotIn(token, "\n".join(captured.output))
+
+    def test_send_password_reset_email_builds_frontend_url_and_does_not_log_token(self):
+        from .tasks import send_password_reset_email
+
+        self.reader.password_reset_token = uuid.uuid4()
+        self.reader.password_reset_token_expires = timezone.now() + timedelta(hours=1)
+        self.reader.save(
+            update_fields=["password_reset_token", "password_reset_token_expires"]
+        )
+
+        token = str(self.reader.password_reset_token)
+        with self.assertLogs("accounts.tasks", level="INFO") as captured:
+            send_password_reset_email(str(self.reader.id))
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["taskreader@example.com"])
+        self.assertIn("Reset your Granite Post password", mail.outbox[0].subject)
+        self.assertIn(
+            f"http://frontend.test/reset-password?token={token}",
+            mail.outbox[0].body,
+        )
+        self.assertNotIn(token, "\n".join(captured.output))
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from config import settings as project_settings_module
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.exceptions import NotFound, Throttled, ValidationError
@@ -10,6 +13,7 @@ from rest_framework.test import APIRequestFactory, APITestCase
 
 from core.cache import get_or_set_cache, invalidate_keys, make_cache_key
 from core.exceptions import _flatten_errors, structured_exception_handler
+from core.middleware import RequestTimingMiddleware, StructuredLoggingMiddleware
 from core.throttling import BurstRateThrottle, RoleBasedThrottle
 
 User = get_user_model()
@@ -93,6 +97,19 @@ class RequestTimingMiddlewareTests(TestCase):
         response = self.client.get("/health/")
         self.assertTrue(response["X-Response-Time"].endswith("ms"))
 
+    def test_slow_request_logs_redact_sensitive_query_params(self):
+        factory = APIRequestFactory()
+        request = factory.get("/api/v1/accounts/verify-email/?token=super-secret&foo=bar")
+        middleware = RequestTimingMiddleware(lambda req: HttpResponse("ok"))
+
+        with patch("core.middleware.time.monotonic", side_effect=[0.0, 6.0]):
+            with self.assertLogs("core.middleware", level="CRITICAL") as captured:
+                middleware(request)
+
+        output = "\n".join(captured.output)
+        self.assertNotIn("super-secret", output)
+        self.assertIn("foo=bar", output)
+
 
 class StructuredLoggingMiddlewareTests(TestCase):
 
@@ -104,6 +121,43 @@ class StructuredLoggingMiddlewareTests(TestCase):
         import uuid
         response = self.client.get("/health/")
         uuid.UUID(response["X-Request-ID"])  # raises if invalid
+
+    def test_query_extra_redacts_sensitive_tokens(self):
+        factory = APIRequestFactory()
+        request = factory.get("/api/v1/newsletter/confirm/?token=live-token&source=postman")
+        middleware = StructuredLoggingMiddleware(lambda req: HttpResponse("ok"))
+
+        with patch("core.middleware.logger.info") as mock_info:
+            middleware(request)
+
+        logged_query = mock_info.call_args.kwargs["extra"]["query"]
+        self.assertNotIn("live-token", logged_query)
+        self.assertIn("source=postman", logged_query)
+
+
+class SecurityConfigurationTests(TestCase):
+
+    def test_production_rejects_placeholder_secret_key(self):
+        with self.assertRaises(ImproperlyConfigured):
+            project_settings_module._validate_security_settings(
+                debug=False,
+                testing=False,
+                secret_key=project_settings_module._INSECURE_SECRET_KEY,
+            )
+
+    def test_debug_runtime_allows_placeholder_secret_key(self):
+        project_settings_module._validate_security_settings(
+            debug=True,
+            testing=False,
+            secret_key=project_settings_module._INSECURE_SECRET_KEY,
+        )
+
+    def test_test_runtime_uses_relaxed_secure_defaults(self):
+        self.assertFalse(project_settings_module._PRODUCTION)
+        self.assertFalse(project_settings_module.SECURE_SSL_REDIRECT)
+        self.assertFalse(project_settings_module.SESSION_COOKIE_SECURE)
+        self.assertFalse(project_settings_module.CSRF_COOKIE_SECURE)
+        self.assertEqual(project_settings_module.SECURE_HSTS_SECONDS, 0)
 
 
 class MaintenanceModeTests(TestCase):

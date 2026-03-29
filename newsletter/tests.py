@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.cache import caches
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -167,6 +168,41 @@ class ConfirmAPITests(APITestCase):
             f"/api/v1/newsletter/confirm/?token={self.subscriber.confirmation_token}"
         )
         self.assertEqual(r.status_code, 200)
+
+
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="noreply@test.com",
+    SITE_URL="https://api.test",
+)
+class NewsletterEmailTaskTests(TestCase):
+
+    def setUp(self):
+        self.subscriber = make_subscriber("mailtask@reader.com")
+
+    def test_send_confirmation_email_uses_site_url_and_does_not_log_token(self):
+        from .tasks import send_confirmation_email
+
+        token = str(self.subscriber.confirmation_token)
+        with self.assertLogs("newsletter.tasks", level="INFO") as captured:
+            send_confirmation_email(self.subscriber.pk)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["mailtask@reader.com"])
+        self.assertIn(
+            f"https://api.test/api/v1/newsletter/confirm/?token={token}",
+            mail.outbox[0].body,
+        )
+        self.assertNotIn(token, "\n".join(captured.output))
+
+    def test_send_welcome_email_sends_plain_email(self):
+        from .tasks import send_welcome_email
+
+        send_welcome_email(self.subscriber.pk)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["mailtask@reader.com"])
+        self.assertIn("Welcome to The Granite Post newsletter", mail.outbox[0].subject)
 
 
 # ---------------------------------------------------------------------------

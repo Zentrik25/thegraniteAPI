@@ -55,15 +55,18 @@ class PaynowClient:
         phone: str,
         email: str,
         reference: str,
+        payment_method: str = "ecocash",
     ) -> dict[str, Any]:
         """
         Initiate a mobile money payment (EcoCash or OneMoney).
 
         Args:
-            amount_usd: Amount to charge in USD (e.g. 2.00).
-            phone:      Reader's mobile number in Zimbabwean format (07xx or 263xx).
-            email:      Reader's email address for the Paynow payment record.
-            reference:  Unique merchant reference string (e.g. "sub-<uuid>").
+            amount_usd:     Amount to charge in USD (e.g. 2.00).
+            phone:          Reader's mobile number in Zimbabwean format (07xx or 263xx).
+            email:          Reader's email address for the Paynow payment record.
+            reference:      Unique merchant reference string (e.g. "sub-<uuid>").
+            payment_method: "ECOCASH" or "ONEMONEY" — controls the Paynow provider
+                            string sent to the gateway. Defaults to EcoCash.
 
         Returns:
             dict with keys:
@@ -73,23 +76,22 @@ class PaynowClient:
               redirect_url (str)— empty for mobile payments
               error (str)       — populated only when ok=False
         """
+        provider = "onemoney" if payment_method.upper() == "ONEMONEY" else "ecocash"
         logger.info(
-            "[Paynow] Mobile payment initiated: phone=%s ref=%s amount_usd=%.2f",
-            phone,
-            reference,
+            "[Paynow] Mobile payment initiated: provider=%s amount_usd=%.2f",
+            provider,
             amount_usd,
         )
         try:
             payment = self._paynow.create_payment(reference, email)
             payment.add("Granite Post Subscription", float(amount_usd))
 
-            response = self._paynow.send_mobile(payment, phone, "ecocash")
+            response = self._paynow.send_mobile(payment, phone, provider)
 
             if response.success:
                 logger.info(
-                    "[Paynow] Mobile payment accepted: ref=%s poll_url=%s",
-                    response.paynow_reference,
-                    response.poll_url,
+                    "[Paynow] Mobile payment accepted: provider=%s",
+                    provider,
                 )
                 return {
                     "ok":           True,
@@ -100,7 +102,10 @@ class PaynowClient:
                 }
 
             error_msg = getattr(response, "error", "Paynow rejected the payment.")
-            logger.warning("[Paynow] Mobile payment rejected: ref=%s error=%s", reference, error_msg)
+            logger.warning(
+                "[Paynow] Mobile payment rejected: provider=%s",
+                provider,
+            )
             return {
                 "ok":           False,
                 "reference":    "",
@@ -110,7 +115,11 @@ class PaynowClient:
             }
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("[Paynow] Mobile payment exception: ref=%s exc=%s", reference, exc)
+            logger.error(
+                "[Paynow] Mobile payment exception: provider=%s exc_type=%s",
+                provider,
+                type(exc).__name__,
+            )
             return {
                 "ok":           False,
                 "reference":    "",
@@ -148,9 +157,7 @@ class PaynowClient:
               error (str)       — populated only when ok=False
         """
         logger.info(
-            "[Paynow] Web payment initiated: email=%s ref=%s amount_usd=%.2f",
-            email,
-            reference,
+            "[Paynow] Web payment initiated: amount_usd=%.2f",
             amount_usd,
         )
         try:
@@ -164,9 +171,7 @@ class PaynowClient:
 
             if response.success:
                 logger.info(
-                    "[Paynow] Web payment accepted: ref=%s redirect=%s",
-                    response.paynow_reference,
-                    response.redirect_url,
+                    "[Paynow] Web payment accepted.",
                 )
                 return {
                     "ok":           True,
@@ -177,7 +182,7 @@ class PaynowClient:
                 }
 
             error_msg = getattr(response, "error", "Paynow rejected the payment.")
-            logger.warning("[Paynow] Web payment rejected: ref=%s error=%s", reference, error_msg)
+            logger.warning("[Paynow] Web payment rejected.")
             return {
                 "ok":           False,
                 "reference":    "",
@@ -187,7 +192,10 @@ class PaynowClient:
             }
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("[Paynow] Web payment exception: ref=%s exc=%s", reference, exc)
+            logger.error(
+                "[Paynow] Web payment exception: exc_type=%s",
+                type(exc).__name__,
+            )
             return {
                 "ok":           False,
                 "reference":    "",
@@ -216,7 +224,7 @@ class PaynowClient:
               status (str)    — Raw Paynow status string
               error (str)     — populated only when ok=False
         """
-        logger.info("[Paynow] Polling payment status: url=%s", poll_url)
+        logger.info("[Paynow] Polling payment status.")
         try:
             status_response = self._paynow.check_transaction_status(poll_url)
 
@@ -226,9 +234,8 @@ class PaynowClient:
             raw_status = getattr(status_response, "status", "") or ""
 
             logger.info(
-                "[Paynow] Poll result: paid=%s ref=%s status=%s",
+                "[Paynow] Poll result: paid=%s status=%s",
                 paid,
-                reference,
                 raw_status,
             )
             return {
@@ -241,7 +248,10 @@ class PaynowClient:
             }
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("[Paynow] Poll exception: url=%s exc=%s", poll_url, exc)
+            logger.error(
+                "[Paynow] Poll exception: exc_type=%s",
+                type(exc).__name__,
+            )
             return {
                 "ok":        False,
                 "paid":      False,
