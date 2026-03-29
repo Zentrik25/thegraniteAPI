@@ -5,6 +5,13 @@ from pathlib import Path
 
 _TESTING = "test" in sys.argv
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 # Load .env file before anything else
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 if _env_path.exists():
@@ -22,15 +29,15 @@ SECRET_KEY = os.environ.get(
     "django-insecure-change-me-in-production",
 )
 
-DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
-
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
 
-MAINTENANCE_MODE = os.environ.get("MAINTENANCE_MODE", "false").lower() == "true"
+DEBUG = _env_flag("DEBUG", default=False)
+
+MAINTENANCE_MODE = _env_flag("MAINTENANCE_MODE", default=False)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -120,7 +127,10 @@ else:
 
 # Cache
 REDIS_URL = os.environ.get("REDIS_URL", "")
-if REDIS_URL and not _TESTING:
+# Redis stays the production default, but local DEBUG mode can run without it.
+USE_REDIS = bool(REDIS_URL) and not _TESTING and (not DEBUG or _env_flag("USE_REDIS", default=False))
+
+if USE_REDIS:
     CACHES = {
         "default": {
             "BACKEND":    "django.core.cache.backends.redis.RedisCache",

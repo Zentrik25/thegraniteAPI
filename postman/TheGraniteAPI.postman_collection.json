@@ -1,0 +1,1073 @@
+﻿{
+  "info": {
+    "_postman_id": "b3af3d30-6d90-4d1b-88b0-5ef5915eb3d2",
+    "name": "The Granite API Local",
+    "description": "Import this collection together with `TheGraniteAPI.local.postman_environment.json`.\n\nBase URL: `{{base_url}}`\n\nNotes:\n- Create at least one Category and one Tag in Django admin before running the article publish flow.\n- `List Categories` and `List Tags` store the first returned IDs into environment variables.\n- Reader verification/reset tokens and newsletter confirm/unsubscribe tokens must be copied into the environment if local email delivery is not wired up.\n- Staff credentials are loaded from the environment file.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Smoke Checks",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health/"
+          }
+        },
+        {
+          "name": "API Root",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/"
+          }
+        },
+        {
+          "name": "Swagger Docs",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/docs/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Setup Lookups",
+      "item": [
+        {
+          "name": "List Categories",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const data = pm.response.json();",
+                  "if (Array.isArray(data) && data.length > 0) {",
+                  "    pm.environment.set('category_id', String(data[0].id));",
+                  "    if (data[0].slug) {",
+                  "        pm.environment.set('category_slug', data[0].slug);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/categories/"
+          }
+        },
+        {
+          "name": "List Tags",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const data = pm.response.json();",
+                  "if (Array.isArray(data) && data.length > 0) {",
+                  "    pm.environment.set('tag_id', String(data[0].id));",
+                  "    if (data[0].slug) {",
+                  "        pm.environment.set('tag_slug', data[0].slug);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/tags/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Staff Auth",
+      "item": [
+        {
+          "name": "Staff Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "if (json.access) {",
+                  "    pm.environment.set('staff_access', json.access);",
+                  "}",
+                  "if (json.refresh) {",
+                  "    pm.environment.set('staff_refresh', json.refresh);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{staff_username}}\",\n  \"password\": \"{{staff_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/token/"
+          }
+        },
+        {
+          "name": "Staff Me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/auth/me/"
+          }
+        },
+        {
+          "name": "Staff Token Refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access) {",
+                  "    pm.environment.set('staff_access', json.access);",
+                  "}",
+                  "if (json.refresh) {",
+                  "    pm.environment.set('staff_refresh', json.refresh);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{staff_refresh}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/token/refresh/"
+          }
+        },
+        {
+          "name": "Staff Token Blacklist (Run Last)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{staff_refresh}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/token/blacklist/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Articles",
+      "item": [
+        {
+          "name": "Create Draft Article",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"{{article_title}}\",\n  \"excerpt\": \"This is an end-to-end Postman test article.\",\n  \"body\": \"<p>Testing the backend from Postman.</p>\",\n  \"status\": \"draft\",\n  \"category\": \"{{category_id}}\",\n  \"tags\": [\"{{tag_id}}\"],\n  \"image_url\": \"https://example.com/test.jpg\",\n  \"image_alt\": \"Test image\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/articles/"
+          }
+        },
+        {
+          "name": "Find Article By Search",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "const first = json.results && json.results[0];",
+                  "if (first && first.slug) {",
+                  "    pm.environment.set('article_slug', first.slug);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/?search={{article_title}}"
+          }
+        },
+        {
+          "name": "Publish Article",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"published\",\n  \"is_breaking\": true,\n  \"top_story_rank\": 1,\n  \"featured_rank\": 1,\n  \"category\": \"{{category_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/"
+          }
+        },
+        {
+          "name": "Public Articles",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/"
+          }
+        },
+        {
+          "name": "Public Article Detail",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/"
+          }
+        },
+        {
+          "name": "Breaking News",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/breaking/"
+          }
+        },
+        {
+          "name": "Top Stories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/top-stories/"
+          }
+        },
+        {
+          "name": "Featured Articles",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/featured/"
+          }
+        },
+        {
+          "name": "Search Published Articles",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/search/?q=granite"
+          }
+        },
+        {
+          "name": "Archive Article (Run Last)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Comments",
+      "item": [
+        {
+          "name": "Submit Comment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.id) {",
+                  "    pm.environment.set('comment_id', String(json.id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"author_name\": \"Postman Reader\",\n  \"author_email\": \"reader@example.com\",\n  \"body\": \"This is a public comment from Postman.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+          }
+        },
+        {
+          "name": "Moderation Queue",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/moderation/comments/?status=pending"
+          }
+        },
+        {
+          "name": "Approve Comment",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/moderation/comments/{{comment_id}}/"
+          }
+        },
+        {
+          "name": "Public Comments",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Record View",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/analytics/articles/{{article_slug}}/view/"
+          }
+        },
+        {
+          "name": "Trending Day",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/analytics/trending/?period=day"
+          }
+        },
+        {
+          "name": "Trending Week",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/analytics/trending/?period=week"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Media",
+      "item": [
+        {
+          "name": "Upload Image",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.id) {",
+                  "    pm.environment.set('media_id', String(json.id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Choose a local JPEG, PNG, or WebP file before sending."
+                },
+                {
+                  "key": "alt_text",
+                  "value": "Test image alt",
+                  "type": "text"
+                },
+                {
+                  "key": "caption",
+                  "value": "Postman upload",
+                  "type": "text"
+                },
+                {
+                  "key": "credit",
+                  "value": "Postman",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/media/"
+          }
+        },
+        {
+          "name": "List Media",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/media/"
+          }
+        },
+        {
+          "name": "Media Detail",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/media/{{media_id}}/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reader Accounts",
+      "item": [
+        {
+          "name": "Register Reader",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{reader_email}}\",\n  \"username\": \"{{reader_username}}\",\n  \"password\": \"{{reader_password}}\",\n  \"display_name\": \"{{reader_display_name}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/register/"
+          }
+        },
+        {
+          "name": "Verify Reader Email",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/verify-email/?token={{reader_verify_token}}"
+          }
+        },
+        {
+          "name": "Reader Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access) {",
+                  "    pm.environment.set('reader_access', json.access);",
+                  "}",
+                  "if (json.refresh) {",
+                  "    pm.environment.set('reader_refresh', json.refresh);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{reader_email}}\",\n  \"password\": \"{{reader_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/login/"
+          }
+        },
+        {
+          "name": "Reader Me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/me/"
+          }
+        },
+        {
+          "name": "Update Reader Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"Reader One Updated\",\n  \"avatar_url\": \"https://example.com/avatar.jpg\",\n  \"bio\": \"Testing reader profile updates from Postman.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/me/"
+          }
+        },
+        {
+          "name": "Change Reader Password",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"{{reader_password}}\",\n  \"new_password\": \"{{reader_new_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/change-password/"
+          }
+        },
+        {
+          "name": "Add Bookmark",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"article_slug\": \"{{article_slug}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/bookmarks/"
+          }
+        },
+        {
+          "name": "List Bookmarks",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/bookmarks/"
+          }
+        },
+        {
+          "name": "Record Reading History",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"article_slug\": \"{{article_slug}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/history/"
+          }
+        },
+        {
+          "name": "List Reading History",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/history/"
+          }
+        },
+        {
+          "name": "Delete Bookmark",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/accounts/bookmarks/{{article_slug}}/"
+          }
+        },
+        {
+          "name": "Clear Reading History",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/accounts/history/"
+          }
+        },
+        {
+          "name": "Reader Token Refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access) {",
+                  "    pm.environment.set('reader_access', json.access);",
+                  "}",
+                  "if (json.refresh) {",
+                  "    pm.environment.set('reader_refresh', json.refresh);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{reader_refresh}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/token/refresh/"
+          }
+        },
+        {
+          "name": "Reader Logout",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{reader_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{reader_refresh}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/logout/"
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{reader_email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/forgot-password/"
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{reader_reset_token}}\",\n  \"password\": \"{{reader_new_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/accounts/reset-password/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Newsletter",
+      "item": [
+        {
+          "name": "Subscribe",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{newsletter_email}}\",\n  \"source\": \"{{newsletter_source}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/newsletter/subscribe/"
+          }
+        },
+        {
+          "name": "Confirm Newsletter Subscription",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/newsletter/confirm/?token={{newsletter_confirm_token}}"
+          }
+        },
+        {
+          "name": "List Subscribers",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{staff_access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/newsletter/subscribers/?confirmed=all"
+          }
+        },
+        {
+          "name": "Unsubscribe",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{newsletter_unsubscribe_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/newsletter/unsubscribe/"
+          }
+        }
+      ]
+    }
+  ]
+}
