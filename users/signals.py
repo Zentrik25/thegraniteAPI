@@ -48,6 +48,14 @@ def sync_role_to_django_permissions(sender, instance, created, **kwargs) -> None
         role, ("Contributors", False, False)
     )
 
+    # Never downgrade an explicit superuser — createsuperuser sets is_superuser
+    # directly without going through the role system. Promote to ADMIN role so
+    # the rest of the system treats them correctly.
+    if instance.is_superuser and role != StaffRole.ADMIN:
+        sender.objects.filter(pk=instance.pk).update(role=StaffRole.ADMIN)
+        instance.role = StaffRole.ADMIN
+        group_name, should_be_staff, should_be_superuser = _ROLE_FLAGS[StaffRole.ADMIN]
+
     needs_update = (
         instance.is_staff != should_be_staff
         or instance.is_superuser != should_be_superuser

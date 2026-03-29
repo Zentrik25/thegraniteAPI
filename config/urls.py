@@ -18,6 +18,7 @@ Route map
 /api/docs/               — Swagger UI
 """
 
+from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -42,6 +43,7 @@ urlpatterns = [
     path("api/v1/", include("analytics.urls")),
     path("api/v1/", include("comments.urls")),
     path("api/v1/", include("newsletter.urls")),
+    path("api/v1/", include("media_assets.urls")),
 
     # ── Auth (JWT) ────────────────────────────────────────────────────
     path("api/v1/auth/token/",           GraniteTokenObtainPairView.as_view(), name="token-obtain"),
@@ -52,3 +54,7 @@ urlpatterns = [
     path("api/schema/", SpectacularAPIView.as_view(),      name="schema"),
     path("api/docs/",   SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]
+
+if settings.DEBUG:
+    from django.conf.urls.static import static
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
