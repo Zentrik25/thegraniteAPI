@@ -1,0 +1,34 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+        "author_name": "Postman Tester",
+        "author_email": "postman@test.com",
+        "body": "This is an automated test comment from Postman."
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Comment submit returns 201', function () {
+          pm.response.to.have.status(201);
+      });
+
+      pm.test('Comment has id', function () {
+          var json = pm.response.json();
+          pm.expect(json.id).to.exist;
+      });
+
+      pm.test('Detail message present', function () {
+          var json = pm.response.json();
+          pm.expect(json.detail).to.be.a('string');
+      });
+
+      var json = pm.response.json();
+      pm.collectionVariables.set('comment_id', json.id);
+    language: text/javascript
+order: 1000

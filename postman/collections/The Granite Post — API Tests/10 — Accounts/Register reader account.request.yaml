@@ -1,0 +1,27 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/accounts/register/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+        "email": "postman_reader@test.com",
+        "username": "postman_reader",
+        "password": "TestPass123!",
+        "display_name": "Postman Reader"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Register returns 201', function () {
+          pm.response.to.have.status(201);
+      });
+
+      pm.test('Response has email', function () {
+          var json = pm.response.json();
+          pm.expect(json.email).to.equal('postman_reader@test.com');
+      });
+    language: text/javascript
+order: 1000

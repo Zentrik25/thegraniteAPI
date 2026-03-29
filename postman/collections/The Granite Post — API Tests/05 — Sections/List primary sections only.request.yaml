@@ -1,0 +1,20 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/sections/?primary=true"
+method: GET
+queryParams:
+  primary: "true"
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Primary sections returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('All sections are primary', function () {
+          var json = pm.response.json();
+          json.results.forEach(function(s) {
+              pm.expect(s.is_primary).to.equal(true);
+          });
+      });
+    language: text/javascript
+order: 2000

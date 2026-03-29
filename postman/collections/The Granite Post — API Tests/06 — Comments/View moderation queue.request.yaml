@@ -1,0 +1,18 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/moderation/comments/"
+method: GET
+headers:
+  Authorization: Bearer {{access_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Moderation queue returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Has results', function () {
+          var json = pm.response.json();
+          pm.expect(json.results).to.be.an('array');
+      });
+    language: text/javascript
+order: 4000

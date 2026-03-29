@@ -1,0 +1,1320 @@
+{
+  "info": {
+    "name": "The Granite Post — API Tests",
+    "description": "Complete automated test suite for The Granite Post CMS API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url",          "value": "http://localhost:8000" },
+    { "key": "access_token",      "value": "" },
+    { "key": "refresh_token",     "value": "" },
+    { "key": "article_slug",      "value": "" },
+    { "key": "test_article_slug", "value": "" },
+    { "key": "comment_id",        "value": "" },
+    { "key": "username",          "value": "thegranite" },
+    { "key": "password",          "value": "yourpassword" }
+  ],
+  "item": [
+    {
+      "name": "01 — Auth",
+      "item": [
+        {
+          "name": "Login and get token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has access token', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.access).to.be.a('string');",
+                  "    pm.expect(json.refresh).to.be.a('string');",
+                  "});",
+                  "",
+                  "pm.test('User role is admin', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.user.role).to.equal('admin');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('access_token', json.access);",
+                  "pm.collectionVariables.set('refresh_token', json.refresh);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/auth/token/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"{{password}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get my profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Profile has username', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.username).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/auth/me/",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+        {
+          "name": "Unauthenticated access returns 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unauthenticated returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/auth/me/"
+          }
+        },
+        {
+          "name": "Invalid token returns 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Invalid token returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/auth/me/",
+            "header": [{ "key": "Authorization", "value": "Bearer invalidtoken123" }]
+          }
+        },
+        {
+          "name": "Refresh token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Refresh returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('New access token returned', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.access).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/auth/token/refresh/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"refresh\": \"{{refresh_token}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 — Articles",
+      "item": [
+        {
+          "name": "List articles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Articles list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has results array', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Response has count', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.count).to.be.a('number');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "if (json.results.length > 0) {",
+                  "    pm.collectionVariables.set('article_slug', json.results[0].slug);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/"
+          }
+        },
+        {
+          "name": "Get article detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Article detail returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Article has required fields', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.title).to.be.a('string');",
+                  "    pm.expect(json.slug).to.be.a('string');",
+                  "    pm.expect(json.body).to.be.a('string');",
+                  "    pm.expect(json.status).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/"
+          }
+        },
+        {
+          "name": "Create article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Create article returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Article slug is generated', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.slug).to.be.a('string');",
+                  "    pm.expect(json.slug.length).to.be.greaterThan(0);",
+                  "});",
+                  "",
+                  "pm.test('Article status is draft', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.status).to.equal('draft');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('test_article_slug', json.slug);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/articles/",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"title\": \"Postman Test Article\",\n    \"body\": \"This article was created by Postman automated tests.\",\n    \"status\": \"draft\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Update article returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Title was updated', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.title).to.equal('Postman Test Article Updated');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/v1/articles/{{test_article_slug}}/",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"title\": \"Postman Test Article Updated\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get top stories",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Top stories returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/top-stories/"
+          }
+        },
+        {
+          "name": "Get breaking news",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Breaking news returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has results array', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/breaking/"
+          }
+        },
+        {
+          "name": "Unknown article returns 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unknown article returns 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/this-article-does-not-exist/"
+          }
+        },
+        {
+          "name": "Create article without auth returns 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('No auth returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/articles/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"title\": \"Should fail\",\n    \"body\": \"No auth.\",\n    \"status\": \"draft\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 — Analytics",
+      "item": [
+        {
+          "name": "Record article view",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Record view returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has recorded field', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.recorded).to.be.a('boolean');",
+                  "});",
+                  "",
+                  "pm.test('Response has view count', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.view_count).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/analytics/articles/{{article_slug}}/view/"
+          }
+        },
+        {
+          "name": "Duplicate view returns recorded false",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Duplicate view returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Recorded is false on duplicate', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.recorded).to.equal(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/analytics/articles/{{article_slug}}/view/"
+          }
+        },
+        {
+          "name": "Trending articles day",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Trending returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/analytics/trending/?period=day"
+          }
+        },
+        {
+          "name": "Trending articles week",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Trending week returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/analytics/trending/?period=week"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 — Search",
+      "item": [
+        {
+          "name": "Search articles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Search returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has results array', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Has count', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.count).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.test('Query echoed in response', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.query).to.equal('zimbabwe');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/search/?q=zimbabwe"
+          }
+        },
+        {
+          "name": "Search too short returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Short query returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/search/?q=a"
+          }
+        },
+        {
+          "name": "Search no query returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('No query returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/search/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 — Sections",
+      "item": [
+        {
+          "name": "List sections",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Sections list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has results array', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Status is ok', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.status).to.equal('ok');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "if (json.results.length > 0) {",
+                  "    pm.collectionVariables.set('section_slug', json.results[0].slug);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/sections/"
+          }
+        },
+        {
+          "name": "List primary sections only",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Primary sections returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('All sections are primary', function () {",
+                  "    var json = pm.response.json();",
+                  "    json.results.forEach(function(s) {",
+                  "        pm.expect(s.is_primary).to.equal(true);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/sections/?primary=true"
+          }
+        },
+        {
+          "name": "Unknown section returns 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unknown section returns 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/sections/this-does-not-exist/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 — Comments",
+      "item": [
+        {
+          "name": "Submit comment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Comment submit returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Comment has id', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.id).to.exist;",
+                  "});",
+                  "",
+                  "pm.test('Detail message present', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.detail).to.be.a('string');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('comment_id', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/comments/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"author_name\": \"Postman Tester\",\n    \"author_email\": \"postman@test.com\",\n    \"body\": \"This is an automated test comment from Postman.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get comments — pending not visible",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Comments list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Pending comment not visible', function () {",
+                  "    var json = pm.response.json();",
+                  "    json.results.forEach(function(c) {",
+                  "        pm.expect(c.author_name).to.not.equal('Postman Tester');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+          }
+        },
+        {
+          "name": "Moderation queue requires auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Moderation requires auth returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/moderation/comments/"
+          }
+        },
+        {
+          "name": "View moderation queue",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Moderation queue returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has results', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/moderation/comments/",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+        {
+          "name": "Approve comment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Approve returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Comment status is approved', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.status).to.equal('approved');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/v1/moderation/comments/{{comment_id}}/",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"action\": \"approve\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get comments — approved now visible",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Comments list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Approved comment is visible', function () {",
+                  "    var json = pm.response.json();",
+                  "    var found = json.results.some(function(c) {",
+                  "        return c.author_name === 'Postman Tester';",
+                  "    });",
+                  "    pm.expect(found).to.equal(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 — Newsletter",
+      "item": [
+        {
+          "name": "Subscribe to newsletter",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Subscribe returns 202', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "pm.test('Has detail message', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.detail).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/newsletter/subscribe/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"postman@thegranitetest.com\",\n    \"source\": \"postman-test\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Duplicate subscribe returns 202",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Duplicate subscribe returns 202', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/newsletter/subscribe/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"postman@thegranitetest.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Invalid email returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Invalid email returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/newsletter/subscribe/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"not-an-email\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Subscriber list requires senior editor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Subscriber list requires auth returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/newsletter/subscribers/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 — Feeds",
+      "item": [
+        {
+          "name": "Main RSS feed",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('RSS feed returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Content type is XML', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('xml');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/rss/"
+          }
+        },
+        {
+          "name": "Sitemap XML",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Sitemap returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Content type is XML', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('xml');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/sitemap.xml"
+          }
+        },
+        {
+          "name": "Google News sitemap",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('News sitemap returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/news-sitemap.xml"
+          }
+        },
+        {
+          "name": "Unknown category RSS returns 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unknown category RSS returns 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/rss/this-category-does-not-exist/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 — Subscriptions",
+      "item": [
+        {
+          "name": "List subscription plans",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Plans list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has at least one plan', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results.length).to.be.greaterThan(0);",
+                  "});",
+                  "",
+                  "pm.test('Plans have USD price', function () {",
+                  "    var json = pm.response.json();",
+                  "    json.results.forEach(function(plan) {",
+                  "        pm.expect(plan.price_usd).to.exist;",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/subscriptions/plans/"
+          }
+        },
+        {
+          "name": "My subscription requires auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('My subscription requires auth returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/subscriptions/my-subscription/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 — Accounts",
+      "item": [
+        {
+          "name": "Register reader account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Register returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has email', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.email).to.equal('postman_reader@test.com');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/accounts/register/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"postman_reader@test.com\",\n    \"username\": \"postman_reader\",\n    \"password\": \"TestPass123!\",\n    \"display_name\": \"Postman Reader\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Duplicate email returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Duplicate email returns 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/accounts/register/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"postman_reader@test.com\",\n    \"username\": \"postman_reader2\",\n    \"password\": \"TestPass123!\",\n    \"display_name\": \"Postman Reader 2\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Reader login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Reader login returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has access token', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.access).to.be.a('string');",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('reader_access_token', json.access);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/accounts/login/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"postman_reader@test.com\",\n    \"password\": \"TestPass123!\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get reader profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has email', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.email).to.equal('postman_reader@test.com');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/me/",
+            "header": [{ "key": "Authorization", "value": "Bearer {{reader_access_token}}" }]
+          }
+        },
+        {
+          "name": "Bookmark article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Bookmark returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/accounts/bookmarks/",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{reader_access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"article_slug\": \"{{article_slug}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List bookmarks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Bookmarks list returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Has results', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.results).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/accounts/bookmarks/",
+            "header": [{ "key": "Authorization", "value": "Bearer {{reader_access_token}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 — Advertising",
+      "item": [
+        {
+          "name": "List ad zones",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Ad zones returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/ads/zones/"
+          }
+        },
+        {
+          "name": "Campaign management requires auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Campaigns require auth returns 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/ads/campaigns/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 — Health Check",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Health check returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Status is ok', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.status).to.equal('ok');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health/"
+          }
+        },
+        {
+          "name": "API root",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('API root returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -126,7 +126,16 @@ class MaintenanceModeMiddleware:
 
 
 def _get_client_ip(request) -> str:
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "unknown")
+    """
+    Get the real client IP, respecting Cloudflare CF-Connecting-IP when the
+    upstream address is a known Cloudflare range. Falls back to
+    X-Forwarded-For then REMOTE_ADDR.
+    """
+    try:
+        from core.cloudflare import get_real_ip
+        return get_real_ip(request)
+    except Exception:
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "unknown")

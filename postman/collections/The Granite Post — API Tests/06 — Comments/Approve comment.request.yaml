@@ -1,0 +1,25 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/moderation/comments/{{comment_id}}/"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+body:
+  type: text
+  content: |-
+    {
+        "action": "approve"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Approve returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Comment status is approved', function () {
+          var json = pm.response.json();
+          pm.expect(json.status).to.equal('approved');
+      });
+    language: text/javascript
+order: 5000

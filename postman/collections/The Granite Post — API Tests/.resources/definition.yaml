@@ -1,0 +1,11 @@
+$kind: collection
+description: Complete automated test suite for The Granite Post CMS API
+variables:
+  base_url: http://localhost:8000
+  access_token: ""
+  refresh_token: ""
+  article_slug: ""
+  test_article_slug: ""
+  comment_id: ""
+  username: thegranite
+  password: yourpassword

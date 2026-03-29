@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/analytics/articles/{{article_slug}}/view/"
+method: POST
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Duplicate view returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Recorded is false on duplicate', function () {
+          var json = pm.response.json();
+          pm.expect(json.recorded).to.equal(false);
+      });
+    language: text/javascript
+order: 2000

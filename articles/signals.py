@@ -12,7 +12,7 @@ Connected in apps.py via AppConfig.ready().
 
 import logging
 
-from django.db.models.signals import pre_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 
@@ -69,4 +69,28 @@ def log_status_transition(sender, instance, **kwargs):
             instance.title,
             previous.status,
             instance.status,
+        )
+
+
+@receiver(post_save, sender="articles.Article")
+def purge_cloudflare_on_publish(sender, instance, **kwargs) -> None:
+    """
+    Purge Cloudflare CDN cache when an article is published or updated.
+
+    Only fires for published articles — drafts and review items are not
+    publicly cached so there is nothing to purge.
+    Silently skips when Cloudflare credentials are not configured (dev/test).
+    """
+    if instance.status != "published":
+        return
+
+    try:
+        from core.cloudflare_purge import purge_article_cache
+        purge_article_cache(instance.slug)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Cloudflare purge failed for article pk=%s slug=%s: %s",
+            instance.pk,
+            instance.slug,
+            exc,
         )

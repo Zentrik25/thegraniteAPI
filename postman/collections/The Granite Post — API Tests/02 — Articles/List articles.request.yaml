@@ -1,0 +1,26 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/articles/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Articles list returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Response has results array', function () {
+          var json = pm.response.json();
+          pm.expect(json.results).to.be.an('array');
+      });
+
+      pm.test('Response has count', function () {
+          var json = pm.response.json();
+          pm.expect(json.count).to.be.a('number');
+      });
+
+      var json = pm.response.json();
+      if (json.results.length > 0) {
+          pm.collectionVariables.set('article_slug', json.results[0].slug);
+      }
+    language: text/javascript
+order: 1000

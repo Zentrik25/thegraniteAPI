@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/articles/{{article_slug}}/comments/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Comments list returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Approved comment is visible', function () {
+          var json = pm.response.json();
+          var found = json.results.some(function(c) {
+              return c.author_name === 'Postman Tester';
+          });
+          pm.expect(found).to.equal(true);
+      });
+    language: text/javascript
+order: 6000

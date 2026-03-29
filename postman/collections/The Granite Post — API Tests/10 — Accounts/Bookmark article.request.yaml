@@ -1,0 +1,20 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/accounts/bookmarks/"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{reader_access_token}}
+body:
+  type: text
+  content: |-
+    {
+        "article_slug": "{{article_slug}}"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Bookmark returns 201', function () {
+          pm.response.to.have.status(201);
+      });
+    language: text/javascript
+order: 5000

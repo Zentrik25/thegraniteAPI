@@ -1,0 +1,11 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/newsletter/subscribers/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Subscriber list requires auth returns 401', function () {
+          pm.response.to.have.status(401);
+      });
+    language: text/javascript
+order: 4000

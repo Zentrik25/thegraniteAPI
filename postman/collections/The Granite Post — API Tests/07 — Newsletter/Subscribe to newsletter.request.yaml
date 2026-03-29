@@ -1,0 +1,25 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/newsletter/subscribe/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+        "email": "postman@thegranitetest.com",
+        "source": "postman-test"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Subscribe returns 202', function () {
+          pm.response.to.have.status(202);
+      });
+
+      pm.test('Has detail message', function () {
+          var json = pm.response.json();
+          pm.expect(json.detail).to.be.a('string');
+      });
+    language: text/javascript
+order: 1000

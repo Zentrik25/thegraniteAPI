@@ -1,0 +1,21 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/analytics/articles/{{article_slug}}/view/"
+method: POST
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Record view returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Response has recorded field', function () {
+          var json = pm.response.json();
+          pm.expect(json.recorded).to.be.a('boolean');
+      });
+
+      pm.test('Response has view count', function () {
+          var json = pm.response.json();
+          pm.expect(json.view_count).to.be.a('number');
+      });
+    language: text/javascript
+order: 1000

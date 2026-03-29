@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/newsletter/subscribe/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+        "email": "postman@thegranitetest.com"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Duplicate subscribe returns 202', function () {
+          pm.response.to.have.status(202);
+      });
+    language: text/javascript
+order: 2000

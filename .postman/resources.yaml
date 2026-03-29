@@ -1,0 +1,10 @@
+# Use this workspace to collaborate
+workspace:
+  id: 21c6aa75-4459-4c95-8a71-f178ac9b40f5
+
+localResources:
+  collections:
+    - ..\advertising\granite-post-tests.json
+cloudResources:
+  collections:
+    ..\postman\collections\The Granite Post — API Tests: cc53caac-4062-4072-9fb6-876837a40a2c

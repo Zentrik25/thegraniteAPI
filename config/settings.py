@@ -288,7 +288,9 @@ LOGGING = {
     },
     "loggers": {
         "django":       {"handlers": ["console"], "level": "INFO",  "propagate": False},
-        "core":         {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "core":                  {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "core.cloudflare":       {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "core.cloudflare_purge": {"handlers": ["console"], "level": "INFO",  "propagate": False},
         "articles":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
         "users":        {"handlers": ["console"], "level": "DEBUG", "propagate": False},
         "analytics":    {"handlers": ["console"], "level": "DEBUG", "propagate": False},
@@ -305,6 +307,51 @@ CELERY_RESULT_BACKEND        = "cache+memory://"
 CELERY_TASK_ALWAYS_EAGER     = True
 CELERY_TASK_EAGER_PROPAGATES = False
 
+# ---------------------------------------------------------------------------
+# Cloudflare CDN
+# ---------------------------------------------------------------------------
+
+# Tell Django to trust X-Forwarded-Proto from upstream proxies (Cloudflare)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST    = True
+
+# Published Cloudflare IPv4 + IPv6 egress ranges.
+# Keep in sync with https://www.cloudflare.com/ips/
+CLOUDFLARE_IPS = [
+    # IPv4
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    # IPv6
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+]
+
+# Cache-purge API credentials (set in .env — safe to leave blank in dev)
+CLOUDFLARE_ZONE_ID   = os.environ.get("CLOUDFLARE_ZONE_ID",   "")
+CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+
+# Canonical public URL used when building absolute URLs for cache purge
+SITE_URL = os.environ.get("SITE_URL", "https://thegranite.co.zw")
+
+# ---------------------------------------------------------------------------
 # Paynow Zimbabwe payment gateway
 PAYNOW_INTEGRATION_ID  = os.environ.get("PAYNOW_INTEGRATION_ID", "")
 PAYNOW_INTEGRATION_KEY = os.environ.get("PAYNOW_INTEGRATION_KEY", "")

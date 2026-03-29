@@ -1,0 +1,36 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/articles/"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+body:
+  type: text
+  content: |-
+    {
+        "title": "Postman Test Article",
+        "body": "This article was created by Postman automated tests.",
+        "status": "draft"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Create article returns 201', function () {
+          pm.response.to.have.status(201);
+      });
+
+      pm.test('Article slug is generated', function () {
+          var json = pm.response.json();
+          pm.expect(json.slug).to.be.a('string');
+          pm.expect(json.slug.length).to.be.greaterThan(0);
+      });
+
+      pm.test('Article status is draft', function () {
+          var json = pm.response.json();
+          pm.expect(json.status).to.equal('draft');
+      });
+
+      var json = pm.response.json();
+      pm.collectionVariables.set('test_article_slug', json.slug);
+    language: text/javascript
+order: 3000

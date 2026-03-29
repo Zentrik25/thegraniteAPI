@@ -1,0 +1,18 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/accounts/me/"
+method: GET
+headers:
+  Authorization: Bearer {{reader_access_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Profile returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Has email', function () {
+          var json = pm.response.json();
+          pm.expect(json.email).to.equal('postman_reader@test.com');
+      });
+    language: text/javascript
+order: 4000

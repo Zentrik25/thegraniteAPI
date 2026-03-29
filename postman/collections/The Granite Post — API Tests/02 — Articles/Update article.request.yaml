@@ -1,0 +1,25 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/articles/{{test_article_slug}}/"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{access_token}}
+body:
+  type: text
+  content: |-
+    {
+        "title": "Postman Test Article Updated"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Update article returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Title was updated', function () {
+          var json = pm.response.json();
+          pm.expect(json.title).to.equal('Postman Test Article Updated');
+      });
+    language: text/javascript
+order: 4000

@@ -1,0 +1,23 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/subscriptions/plans/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Plans list returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+
+      pm.test('Has at least one plan', function () {
+          var json = pm.response.json();
+          pm.expect(json.results.length).to.be.greaterThan(0);
+      });
+
+      pm.test('Plans have USD price', function () {
+          var json = pm.response.json();
+          json.results.forEach(function(plan) {
+              pm.expect(plan.price_usd).to.exist;
+          });
+      });
+    language: text/javascript
+order: 1000

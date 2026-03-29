@@ -1,0 +1,13 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/analytics/trending/?period=week"
+method: GET
+queryParams:
+  period: week
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Trending week returns 200', function () {
+          pm.response.to.have.status(200);
+      });
+    language: text/javascript
+order: 4000
