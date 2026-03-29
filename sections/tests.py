@@ -58,12 +58,14 @@ class SectionModelTests(TestCase):
         self.assertEqual(s.slug, "business")
 
     def test_slug_collision_resolved(self):
-        s1 = make_section("News")
-        s2 = Section.objects.create(name="News Extra", display_order=2)
-        s2.slug = ""
-        s2.name = "News"
+        s1 = make_section("Business")
+        # Force s1's slug to "sport" via update() (bypasses save) to manufacture
+        # a collision scenario without violating the unique name constraint.
+        Section.objects.filter(pk=s1.pk).update(slug="sport")
+        # s2.name="Sport" → slugifies to "sport" → collision → must get "sport-1"
+        s2 = Section(name="Sport", display_order=2)
         s2.save()
-        self.assertNotEqual(s1.slug, s2.slug)
+        self.assertNotEqual("sport", s2.slug)
 
     def test_str_returns_name(self):
         s = make_section("Politics")

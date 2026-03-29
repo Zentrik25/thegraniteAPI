@@ -2,4 +2,9 @@ from django.apps import AppConfig
 
 
 class NotificationsConfig(AppConfig):
-    name = 'notifications'
+    default_auto_field = "django.db.models.BigAutoField"
+    name               = "notifications"
+    verbose_name       = "Granite Post — Notifications"
+
+    def ready(self) -> None:
+        import notifications.signals  # noqa: F401

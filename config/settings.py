@@ -62,6 +62,10 @@ INSTALLED_APPS = [
     "sections.apps.SectionsConfig",
     "redirects.apps.RedirectsConfig",
     "audit.apps.AuditConfig",
+    "accounts.apps.AccountsConfig",
+    "advertising.apps.AdvertisingConfig",
+    "notifications.apps.NotificationsConfig",
+    "subscription.apps.SubscriptionConfig",
 ]
 
 MIDDLEWARE = [

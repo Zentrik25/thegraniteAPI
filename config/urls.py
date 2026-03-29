@@ -37,7 +37,7 @@ urlpatterns = [
     path("", include("feeds.urls")),
 
     # ── API v1 ────────────────────────────────────────────────────────
-    path("api/",    include("articles.urls")),   # tests use /api/articles/
+    #path("api/",    include("articles.urls")),   # tests use /api/articles/
     path("api/v1/", include("articles.urls")),   # external clients use /api/v1/articles/
     path("api/v1/", include("users.urls")),
     path("api/v1/", include("analytics.urls")),
@@ -48,6 +48,10 @@ urlpatterns = [
     path("api/v1/", include("sections.urls")),
     path("api/v1/", include("redirects.urls")),
     path("api/v1/", include("audit.urls")),
+    path("api/v1/", include("accounts.urls")),
+    path("api/v1/", include("advertising.urls")),
+    path("api/v1/", include("notifications.urls")),
+    path("api/v1/", include("subscription.urls")),
 
     # ── Auth (JWT) ────────────────────────────────────────────────────
     path("api/v1/auth/token/",           GraniteTokenObtainPairView.as_view(), name="token-obtain"),
