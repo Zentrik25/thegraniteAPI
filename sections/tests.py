@@ -31,13 +31,20 @@ def make_category(name="Zimbabwe News", section=None):
     return Category.objects.create(name=name, section=section)
 
 
-def make_article(author, category=None, art_status=PublishStatus.PUBLISHED):
+def make_article(
+    author,
+    category=None,
+    art_status=PublishStatus.PUBLISHED,
+    is_premium=False,
+    title="Test Article",
+):
     return Article.objects.create(
-        title    = "Test Article",
-        body     = "Body content.",
-        author   = author,
-        status   = art_status,
-        category = category,
+        title      = title,
+        body       = "Body content.",
+        author     = author,
+        status     = art_status,
+        category   = category,
+        is_premium = is_premium,
     )
 
 
@@ -288,3 +295,166 @@ class SectionUpdateAPITests(APITestCase):
             {"description": "Unauthorised update."},
         )
         self.assertEqual(r.status_code, 403)
+
+
+# ---------------------------------------------------------------------------
+# Hero article — paywall and publish-status safety
+# ---------------------------------------------------------------------------
+
+class SectionHeroArticleSafetyTests(APITestCase):
+    """
+    Verify that GET /api/v1/sections/<slug>/ never exposes:
+      - body content of any article (premium or free)
+      - unpublished (draft / review) content through the hero slot
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        self.user    = make_user("hero_reporter")
+        self.section = make_section("Hero Safety Test Section")
+        self.cat     = make_category("Hero Safety Cat", section=self.section)
+
+    def _get_hero(self, section_slug):
+        r = self.client.get(f"/api/v1/sections/{section_slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.data.get("hero_article")
+
+    # ------------------------------------------------------------------
+    # body is never present
+    # ------------------------------------------------------------------
+
+    def test_free_published_hero_does_not_expose_body(self):
+        """Free published article in hero slot must not include body field."""
+        article = make_article(self.user, category=self.cat)
+        self.section.featured_article = article
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNotNone(hero)
+        self.assertNotIn("body", hero)
+
+    def test_premium_hero_does_not_expose_body(self):
+        """Premium published article pinned as hero must not expose body."""
+        premium = make_article(
+            self.user,
+            category   = self.cat,
+            is_premium = True,
+        )
+        self.section.featured_article = premium
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNotNone(hero)
+        self.assertNotIn("body", hero)
+
+    # ------------------------------------------------------------------
+    # is_premium flag is present so the frontend can show a paywall badge
+    # ------------------------------------------------------------------
+
+    def test_hero_has_is_premium_field(self):
+        """hero_article must carry is_premium so the frontend knows to gate it."""
+        article = make_article(self.user, category=self.cat)
+        self.section.featured_article = article
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIn("is_premium", hero)
+
+    def test_premium_hero_is_premium_flag_is_true(self):
+        premium = make_article(self.user, category=self.cat, is_premium=True)
+        self.section.featured_article = premium
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertTrue(hero["is_premium"])
+
+    def test_free_hero_is_premium_flag_is_false(self):
+        free = make_article(self.user, category=self.cat, is_premium=False)
+        self.section.featured_article = free
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertFalse(hero["is_premium"])
+
+    # ------------------------------------------------------------------
+    # unpublished pinned articles are not exposed
+    # ------------------------------------------------------------------
+
+    def test_draft_hero_falls_back_to_latest_published(self):
+        """If the pinned article is a draft, the hero returns the latest published."""
+        published = make_article(
+            self.user, category=self.cat, title="Published Article"
+        )
+        draft = make_article(
+            self.user,
+            category   = self.cat,
+            art_status = PublishStatus.DRAFT,
+            title      = "Draft Article",
+        )
+        self.section.featured_article = draft
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNotNone(hero)
+        # Must return the published article, not the draft
+        self.assertEqual(hero["slug"], published.slug)
+        self.assertNotIn("body", hero)
+
+    def test_review_hero_falls_back_to_latest_published(self):
+        """If the pinned article is in review, the hero returns the latest published."""
+        published = make_article(
+            self.user, category=self.cat, title="Live Article"
+        )
+        review = make_article(
+            self.user,
+            category   = self.cat,
+            art_status = PublishStatus.REVIEW,
+            title      = "Under Review",
+        )
+        self.section.featured_article = review
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNotNone(hero)
+        self.assertEqual(hero["slug"], published.slug)
+
+    def test_unpublished_hero_and_no_published_fallback_returns_null(self):
+        """If the pinned article is a draft and there are no published articles,
+        hero_article must be null — never expose the draft."""
+        draft = make_article(
+            self.user,
+            category   = self.cat,
+            art_status = PublishStatus.DRAFT,
+        )
+        self.section.featured_article = draft
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNone(hero)
+
+    # ------------------------------------------------------------------
+    # Stable shape — existing published free content is not broken
+    # ------------------------------------------------------------------
+
+    def test_free_published_hero_has_expected_fields(self):
+        """Ensure the hero response shape is usable by the frontend."""
+        article = make_article(self.user, category=self.cat)
+        self.section.featured_article = article
+        self.section.save(update_fields=["featured_article"])
+
+        hero = self._get_hero(self.section.slug)
+        for field in ("id", "title", "slug", "excerpt", "image_url",
+                      "published_at", "is_premium", "category"):
+            self.assertIn(field, hero)
+
+    def test_no_pinned_hero_returns_latest_published(self):
+        """When no article is pinned, hero falls back to latest published."""
+        article = make_article(self.user, category=self.cat)
+        # section.featured_article is None by default
+
+        hero = self._get_hero(self.section.slug)
+        self.assertIsNotNone(hero)
+        self.assertEqual(hero["slug"], article.slug)
+        self.assertNotIn("body", hero)

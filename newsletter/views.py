@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.logging_utils import _mask_email
 from core.pagination import StandardResultsPagination
 from users.permissions import IsSeniorEditorOrAbove
 
@@ -56,12 +57,12 @@ class SubscribeView(APIView):
             )
             logger.info(
                 "New subscriber: email=%s source=%s",
-                email,
+                _mask_email(email),
                 source,
             )
         elif subscriber.confirmed:
             # Already confirmed — silently return 202.
-            logger.debug("Subscribe attempt for already confirmed email: %s", email)
+            logger.debug("Subscribe attempt for already confirmed email: %s", _mask_email(email))
         else:
             # Unconfirmed — resend confirmation.
             from .tasks import send_confirmation_email
@@ -69,7 +70,7 @@ class SubscribeView(APIView):
                 args=[subscriber.pk],
                 queue="slow",
             )
-            logger.info("Resent confirmation email to: %s", email)
+            logger.info("Resent confirmation email to: %s", _mask_email(email))
 
         return Response(
             {
@@ -125,7 +126,7 @@ class ConfirmView(APIView):
             queue="slow",
         )
 
-        logger.info("Subscriber confirmed: email=%s", subscriber.email)
+        logger.info("Subscriber confirmed: email=%s", _mask_email(subscriber.email))
 
         return Response(
             {
@@ -163,7 +164,7 @@ class UnsubscribeView(APIView):
             subscriber = Subscriber.objects.get(unsubscribe_token=token)
             email      = subscriber.email
             subscriber.unsubscribe()
-            logger.info("Subscriber unsubscribed: email=%s", email)
+            logger.info("Subscriber unsubscribed: email=%s", _mask_email(email))
         except Subscriber.DoesNotExist:
             # Return 200 regardless — prevents token enumeration.
             pass

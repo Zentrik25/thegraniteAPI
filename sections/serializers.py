@@ -51,13 +51,23 @@ class SectionDetailSerializer(SectionSerializer):
         )
 
     def get_hero_article(self, obj):
-        from articles.serializers import ArticleDetailSerializer
+        from articles.models import PublishStatus
+        from articles.serializers import SectionHeroSerializer
+
         hero = obj.get_hero_article()
-        if hero:
-            return ArticleDetailSerializer(
-                hero, context=self.context
-            ).data
-        return None
+        if hero is None:
+            return None
+
+        # Guard: if the pinned featured_article is not published (e.g. an editor
+        # pinned a draft or a review article), do not expose it publicly.
+        # Fall back to the most recent published article in the section instead.
+        if hero.status != PublishStatus.PUBLISHED:
+            hero = obj.get_latest_articles(n=1).first()
+        if hero is None:
+            return None
+
+        # SectionHeroSerializer is body-free — premium content is never exposed.
+        return SectionHeroSerializer(hero, context=self.context).data
 
     def get_categories(self, obj):
         from articles.serializers import CategorySerializer

@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from articles.models import Article
 from core.middleware import _get_client_ip
 from core.pagination import StandardResultsPagination
-from users.permissions import IsEditorOrAbove, IsModeratorOrAbove
+from users.permissions import IsModeratorOrAbove
 
 from .models import Comment, CommentStatus
 from .serializers import (
@@ -60,9 +60,10 @@ class ArticleCommentsView(APIView):
         )
 
         serializer = CommentPublicSerializer(comments, many=True)
+        results    = serializer.data          # evaluates queryset once
         return Response({
-            "count":    comments.count(),
-            "results":  serializer.data,
+            "count":   len(results),          # avoids a redundant COUNT query
+            "results": results,
         })
 
     def post(self, request, slug):

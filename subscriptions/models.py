@@ -251,8 +251,9 @@ class Subscription(models.Model):
         )
 
     @property
-    def days_remaining(self) -> int:
-        """Number of days remaining in the current billing period."""
+    def days_remaining(self):
+        if not self.current_period_end:
+            return None
         return (self.current_period_end - date.today()).days
 
 

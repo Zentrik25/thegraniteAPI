@@ -42,6 +42,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.logging_utils import _mask_email
 from core.pagination import StandardResultsPagination
 
 from .authentication import ReaderJWTAuthentication, get_tokens_for_reader
@@ -95,7 +96,7 @@ class RegisterView(APIView):
 
         logger.info(
             "Reader registered: pk=%s username=%s email=%s",
-            reader.id, reader.username, reader.email,
+            reader.id, reader.username, _mask_email(reader.email),
         )
 
         return Response(
@@ -155,7 +156,7 @@ class VerifyEmailView(APIView):
         reader.email_verification_token = uuid.uuid4()   # rotate — prevents replay
         reader.save(update_fields=["is_email_verified", "email_verification_token"])
 
-        logger.info("Reader email verified: pk=%s email=%s", reader.id, reader.email)
+        logger.info("Reader email verified: pk=%s email=%s", reader.id, _mask_email(reader.email))
 
         return Response(
             {"detail": "Email address verified. You can now log in."},
@@ -220,7 +221,7 @@ class LoginView(APIView):
         ReaderAccount.objects.filter(pk=reader.pk).update(last_login=timezone.now())
         reader.refresh_from_db(fields=["last_login"])
 
-        logger.info("Reader logged in: pk=%s email=%s", reader.id, reader.email)
+        logger.info("Reader logged in: pk=%s email=%s", reader.id, _mask_email(reader.email))
 
         return Response(
             {**tokens, "reader": ReaderProfileSerializer(reader).data},
@@ -432,7 +433,7 @@ class ForgotPasswordView(APIView):
         send_password_reset_email.apply_async(args=[str(reader.id)], queue="slow")
 
         logger.info(
-            "Password reset requested: pk=%s email=%s", reader.id, reader.email
+            "Password reset requested: pk=%s email=%s", reader.id, _mask_email(reader.email)
         )
 
         return Response(self._RESPONSE, status=status.HTTP_202_ACCEPTED)
@@ -485,7 +486,7 @@ class ResetPasswordView(APIView):
             update_fields=["password", "password_reset_token", "password_reset_token_expires"]
         )
 
-        logger.info("Reader password reset: pk=%s email=%s", reader.id, reader.email)
+        logger.info("Reader password reset: pk=%s email=%s", reader.id, _mask_email(reader.email))
 
         return Response({"detail": "Password has been reset. You can now log in."})
 

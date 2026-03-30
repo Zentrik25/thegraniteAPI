@@ -12,6 +12,8 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 
+from core.logging_utils import _mask_email
+
 logger = logging.getLogger("accounts.tasks")
 
 
@@ -64,7 +66,7 @@ def send_verification_email(self, reader_id: str) -> None:
         logger.error(
             "Failed to send verification email: reader_id=%s email=%s error=%s",
             reader.id,
-            reader.email,
+            _mask_email(reader.email),
             exc,
         )
         raise self.retry(exc=exc)
@@ -72,7 +74,7 @@ def send_verification_email(self, reader_id: str) -> None:
     logger.info(
         "Verification email sent: reader_id=%s email=%s",
         reader.id,
-        reader.email,
+        _mask_email(reader.email),
     )
 
 
@@ -128,7 +130,7 @@ def send_password_reset_email(self, reader_id: str) -> None:
         logger.error(
             "Failed to send password reset email: reader_id=%s email=%s error=%s",
             reader.id,
-            reader.email,
+            _mask_email(reader.email),
             exc,
         )
         raise self.retry(exc=exc)
@@ -136,5 +138,5 @@ def send_password_reset_email(self, reader_id: str) -> None:
     logger.info(
         "Password reset email sent: reader_id=%s email=%s",
         reader.id,
-        reader.email,
+        _mask_email(reader.email),
     )

@@ -108,6 +108,20 @@ class ArticleDetailSerializer(ArticleListSerializer):
         )
 
 
+class SectionHeroSerializer(ArticleListSerializer):
+    """
+    Public-safe hero article for section landing pages.
+
+    Intentionally extends ArticleListSerializer (no ``body`` field) so premium
+    and free article bodies are never exposed through the public section endpoint.
+    Adds ``is_premium`` so the frontend can render a paywall badge and teaser CTA
+    without receiving gated content.
+    """
+
+    class Meta(ArticleListSerializer.Meta):
+        fields = ArticleListSerializer.Meta.fields + ("is_premium",)
+
+
 # ---------------------------------------------------------------------------
 # Article — write
 # ---------------------------------------------------------------------------

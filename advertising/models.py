@@ -204,8 +204,11 @@ class AdCampaign(TimeStampedModel):
 
     def clean(self) -> None:
         super().clean()
-        if self.end_date < self.start_date:
-            raise ValidationError({"end_date": "end_date must be on or after start_date."})
+        if self.start_date and self.end_date:
+            if self.end_date < self.start_date:
+                raise ValidationError({
+                    "end_date": "end_date must be on or after start_date."
+                })
 
     @property
     def ctr(self) -> float:

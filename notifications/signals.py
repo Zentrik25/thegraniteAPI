@@ -1,5 +1,6 @@
 import logging
 
+from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -35,16 +36,25 @@ def send_breaking_news_notification(sender, instance, created, **kwargs) -> None
         except Article.DoesNotExist:
             pass
 
-        from .tasks import send_breaking_news_push
-        send_breaking_news_push.apply_async(
-            args=[instance.pk],
-            queue="slow",
-        )
-        logger.info(
-            "Breaking news notification queued: article pk=%s slug=%s",
-            instance.pk,
-            instance.slug,
-        )
+        # Web push makes external HTTP calls.  Defer until after the DB
+        # transaction commits so a rolled-back save never fires a push, and
+        # the request thread is not held waiting on external latency.
+        # In TestCase tests the transaction never commits, so this is a
+        # no-op there — which prevents real push calls during test runs.
+        pk   = instance.pk
+        slug = instance.slug
+
+        def _push():
+            from .tasks import send_breaking_news_push
+            send_breaking_news_push.apply_async(args=[pk], queue="slow")
+            logger.info(
+                "Breaking news notification queued: article pk=%s slug=%s",
+                pk,
+                slug,
+            )
+
+        transaction.on_commit(_push)
+
     except Exception as exc:
         logger.error(
             "Failed to queue breaking news notification for article pk=%s: %s",

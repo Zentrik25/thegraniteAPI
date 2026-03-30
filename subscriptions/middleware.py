@@ -31,6 +31,18 @@ _ARTICLE_DETAIL_RE = re.compile(r"^/api/v1/articles/(?P<slug>[^/]+)/?$")
 # Cache TTL for subscription status per reader (seconds)
 _CACHE_TTL = 300
 
+# Cache TTL for the article is_premium flag (seconds).
+# Short so a newly-gated article propagates within a minute.
+# Invalidation: articles.signals should call
+#   cache.delete(f"paywall:article:premium:{slug}") on Article post_save.
+_ARTICLE_PREMIUM_CACHE_TTL = 60
+
+# Cache key + TTL for the upgrade-plan list returned in 402 responses.
+# Also used by PlanListView in subscriptions/views.py.
+# Invalidation: call cache.delete(_PLANS_CACHE_KEY) after any SubscriptionPlan save.
+_PLANS_CACHE_KEY = "paywall:upgrade_plans"
+_PLANS_CACHE_TTL = 600  # 10 minutes — plans change rarely
+
 
 class PaywallMiddleware:
     """
@@ -59,20 +71,16 @@ Only intercepts GET/HEAD requests matching /api/v1/articles/<slug>/.
 
         slug = match.group("slug")
 
-        # Fetch the article — lazy import to avoid circular dependency at startup
-        from articles.models import Article, PublishStatus
+        # Check the article's is_premium flag (cached to avoid a DB hit on
+        # every public article request).
+        is_premium = _get_article_premium_flag(slug)
 
-        try:
-            article = Article.objects.only("slug", "is_premium", "status").get(
-                slug=slug,
-                status=PublishStatus.PUBLISHED,
-            )
-        except Article.DoesNotExist:
-            # Let the view return the 404 — not our concern
+        if is_premium is None:
+            # Article not found — pass through and let the view return 404.
             return self.get_response(request)
 
         # Non-premium articles: pass through immediately
-        if not article.is_premium:
+        if not is_premium:
             return self.get_response(request)
 
         # Premium article — check authentication
@@ -102,27 +110,30 @@ Only intercepts GET/HEAD requests matching /api/v1/articles/<slug>/.
 
     def _paywall_response(self, slug: str) -> JsonResponse:
         """Return a 402 Payment Required response with upgrade information."""
-        from subscriptions.models import ArticleAccess, SubscriptionPlan
+        upgrade_plans = cache.get(_PLANS_CACHE_KEY)
+        if upgrade_plans is None:
+            from subscriptions.models import ArticleAccess, SubscriptionPlan
 
-        plans = list(
-            SubscriptionPlan.objects.filter(
-                is_active=True,
-                article_access__in=[ArticleAccess.PREMIUM, ArticleAccess.ALL],
+            plans = list(
+                SubscriptionPlan.objects.filter(
+                    is_active=True,
+                    article_access__in=[ArticleAccess.PREMIUM, ArticleAccess.ALL],
+                )
+                .order_by("price_usd")
+                .values("name", "slug", "price_usd", "billing_period")
             )
-            .order_by("price_usd")
-            .values("name", "slug", "price_usd", "billing_period")
-        )
 
-        upgrade_plans = [
-            {
-                "name":            p["name"],
-                "slug":            p["slug"],
-                "price_usd":       str(p["price_usd"]),
-                "billing_period":  p["billing_period"],
-                "currency":        "USD",
-            }
-            for p in plans
-        ]
+            upgrade_plans = [
+                {
+                    "name":           p["name"],
+                    "slug":           p["slug"],
+                    "price_usd":      str(p["price_usd"]),
+                    "billing_period": p["billing_period"],
+                    "currency":       "USD",
+                }
+                for p in plans
+            ]
+            cache.set(_PLANS_CACHE_KEY, upgrade_plans, _PLANS_CACHE_TTL)
 
         return JsonResponse(
             {
@@ -133,6 +144,41 @@ Only intercepts GET/HEAD requests matching /api/v1/articles/<slug>/.
             },
             status=402,
         )
+
+
+# ---------------------------------------------------------------------------
+# Article premium-flag cache helper
+# ---------------------------------------------------------------------------
+
+def _get_article_premium_flag(slug: str):
+    """
+    Return the ``is_premium`` bool for *slug*, or None if the article is not
+    found / not published.  Result is cached for ``_ARTICLE_PREMIUM_CACHE_TTL``
+    seconds so that non-premium article GETs avoid a DB round-trip.
+
+    ``is_premium`` is always True or False (never None), so Django's default
+    cache-miss sentinel (None) is safe to use here.
+
+    Invalidation: call ``cache.delete(f"paywall:article:premium:{slug}")``
+    from ``articles.signals`` whenever ``Article.is_premium`` or
+    ``Article.status`` changes.
+    """
+    cache_key = f"paywall:article:premium:{slug}"
+    cached    = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    from articles.models import Article, PublishStatus
+
+    try:
+        article = Article.objects.only("is_premium").get(
+            slug=slug, status=PublishStatus.PUBLISHED
+        )
+    except Article.DoesNotExist:
+        return None  # Not cached — 404 paths are not the hot-path
+
+    cache.set(cache_key, article.is_premium, _ARTICLE_PREMIUM_CACHE_TTL)
+    return article.is_premium
 
 
 # ---------------------------------------------------------------------------

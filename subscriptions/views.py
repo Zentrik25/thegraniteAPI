@@ -40,6 +40,7 @@ from rest_framework.views import APIView
 
 from accounts.authentication import ReaderJWTAuthentication
 from accounts.permissions import IsReader
+from core.logging_utils import _mask_email
 from core.pagination import StandardResultsPagination
 from core.throttling import BurstRateThrottle
 from users.permissions import IsSeniorEditorOrAbove
@@ -65,25 +66,25 @@ from .serializers import (
     SubscriptionPlanSerializer,
     SubscriptionSerializer,
 )
+from .middleware import _PLANS_CACHE_KEY, _PLANS_CACHE_TTL
 from .throttling import PaynowCallbackThrottle, PaymentPollThrottle
 from . import services
 from .tasks import process_paynow_callback
 
 logger = logging.getLogger("subscriptions.views")
 
-_SUBSCRIPTION_CACHE_TTL = 300  # 5 minutes
-
 
 # ---------------------------------------------------------------------------
 # Public
 # ---------------------------------------------------------------------------
+
 
 class PlanListView(generics.ListAPIView):
     """
     GET /api/v1/subscriptions/plans/
 
     Returns all active subscription plans with USD pricing.
-    No authentication required.
+    No authentication required.  Response is cached for 10 minutes.
     """
 
     serializer_class    = SubscriptionPlanSerializer
@@ -94,6 +95,16 @@ class PlanListView(generics.ListAPIView):
     def get_queryset(self):
         """Return only active plans ordered by ascending price."""
         return SubscriptionPlan.objects.filter(is_active=True).order_by("price_usd")
+
+    def list(self, request, *args, **kwargs):
+        """Cache the serialized plan list; stable data changes rarely."""
+        cached = cache.get(_PLANS_CACHE_KEY)
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        if response.status_code == 200:
+            cache.set(_PLANS_CACHE_KEY, response.data, _PLANS_CACHE_TTL)
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +207,7 @@ class SubscribeView(APIView):
             _invalidate_reader_subscription_cache(reader.id)
             logger.info(
                 "[Subscribe] Free plan activated: reader=%s plan=%s",
-                reader.email,
+                _mask_email(reader.email),
                 plan.slug,
             )
             return Response(
@@ -242,7 +253,7 @@ class SubscribeView(APIView):
             subscription.delete()
             logger.warning(
                 "[Subscribe] Paynow payment initiation failed: reader=%s",
-                reader.email,
+                _mask_email(reader.email),
             )
             return Response(
                 {"detail": f"Payment gateway error: {result['error']}"},
@@ -266,7 +277,7 @@ class SubscribeView(APIView):
             subscription.delete()
             logger.error(
                 "[Subscribe] Duplicate Paynow reference returned: reader=%s",
-                reader.email,
+                _mask_email(reader.email),
             )
             return Response(
                 {"detail": "Payment gateway error: duplicate payment reference."},
@@ -280,7 +291,7 @@ class SubscribeView(APIView):
 
         logger.info(
             "[Subscribe] Payment initiated: reader=%s plan=%s",
-            reader.email,
+            _mask_email(reader.email),
             plan.slug,
         )
 
@@ -598,21 +609,29 @@ class RevenueReportView(APIView):
             or Decimal("0.00")
         )
 
-        # Per-plan breakdown
-        breakdown = []
-        for plan in SubscriptionPlan.objects.filter(is_active=True).order_by("price_usd"):
-            active_count = Subscription.objects.filter(
-                plan=plan,
-                status=SubscriptionStatus.ACTIVE,
-                current_period_end__gte=today,
-            ).count()
-            breakdown.append({
-                "plan_name":       plan.name,
-                "plan_slug":       plan.slug,
-                "price_usd":       str(plan.price_usd),
-                "active_count":    active_count,
-                "currency":        "USD",
-            })
+        # Per-plan breakdown — single aggregation replaces N per-plan COUNT queries.
+        plan_active_counts = {
+            row["plan_id"]: row["cnt"]
+            for row in (
+                Subscription.objects
+                .filter(
+                    status=SubscriptionStatus.ACTIVE,
+                    current_period_end__gte=today,
+                )
+                .values("plan_id")
+                .annotate(cnt=Count("id"))
+            )
+        }
+        breakdown = [
+            {
+                "plan_name":    plan.name,
+                "plan_slug":    plan.slug,
+                "price_usd":    str(plan.price_usd),
+                "active_count": plan_active_counts.get(plan.pk, 0),
+                "currency":     "USD",
+            }
+            for plan in SubscriptionPlan.objects.filter(is_active=True).order_by("price_usd")
+        ]
 
         data = {
             "total_active_subscribers":   total_active,

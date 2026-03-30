@@ -31,6 +31,28 @@ def _validate_security_settings(*, debug: bool, testing: bool, secret_key: str) 
             "SECRET_KEY must be set to a non-default value when DEBUG=False."
         )
 
+
+def _validate_email_settings(
+    *,
+    production: bool,
+    email_host: str,
+    email_backend: str,
+) -> None:
+    """
+    Fail fast when production is configured to send real SMTP email but
+    EMAIL_HOST is still pointing at localhost — that means the operator
+    forgot to set a real relay and every transactional email will silently
+    fail to deliver.
+    """
+    if not production:
+        return
+    smtp_backend = "django.core.mail.backends.smtp.EmailBackend"
+    if email_backend == smtp_backend and email_host in ("localhost", "127.0.0.1", ""):
+        raise ImproperlyConfigured(
+            "EMAIL_HOST must be set to a real SMTP relay when DEBUG=False. "
+            "Currently pointing at localhost, which will not deliver email in production."
+        )
+
 # Load .env file before anything else
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 if _env_path.exists():
@@ -311,14 +333,22 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "verbose": {
-            "format": "{levelname} {asctime} {name} {message}",
+            # request_id is injected by StructuredLoggingMiddleware; the
+            # AddRequestDefaults filter ensures the field is always present.
+            "format": "{levelname} {asctime} {name} [{request_id}] {message}",
             "style":  "{",
+        },
+    },
+    "filters": {
+        "request_defaults": {
+            "()": "core.logging_utils.AddRequestDefaults",
         },
     },
     "handlers": {
         "console": {
             "class":     "logging.StreamHandler",
             "formatter": "verbose",
+            "filters":   ["request_defaults"],
         },
     },
     "root": {
@@ -326,24 +356,35 @@ LOGGING = {
         "level":    "WARNING",
     },
     "loggers": {
-        "django":       {"handlers": ["console"], "level": "INFO",  "propagate": False},
-        "core":                  {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "core.cloudflare":       {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "core.cloudflare_purge": {"handlers": ["console"], "level": "INFO",  "propagate": False},
-        "articles":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "users":        {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "analytics":    {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "comments":     {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "newsletter":   {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "search":       {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "media_assets":  {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "subscriptions": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "django":                {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "core":                  {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "core.cloudflare":       {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "core.cloudflare_purge": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        # One entry per app — all at INFO so DEBUG cache/signal noise is suppressed.
+        "accounts":      {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "advertising":   {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "articles":      {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "audit":         {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "analytics":     {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "comments":      {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "media_assets":  {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "newsletter":    {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "notifications": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "redirects":     {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "search":        {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "sections":      {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "subscriptions": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "users":         {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
 
 CELERY_BROKER_URL            = "memory://" if _TESTING else os.environ.get("REDIS_URL", "memory://")
 CELERY_RESULT_BACKEND        = "cache+memory://"
-CELERY_TASK_ALWAYS_EAGER     = True
+# Eager mode: always on for the test runner so tasks execute synchronously
+# in tests without a broker.  In all other environments it is off by default
+# — set CELERY_TASK_ALWAYS_EAGER=true in .env only for local dev convenience
+# when you are not running a Celery worker.  Production must never set this.
+CELERY_TASK_ALWAYS_EAGER     = _TESTING or _env_flag("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_EAGER_PROPAGATES = False
 CELERY_TIMEZONE              = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
@@ -425,6 +466,11 @@ EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = _env_flag("EMAIL_USE_TLS", default=False)
 EMAIL_USE_SSL = _env_flag("EMAIL_USE_SSL", default=False)
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
+_validate_email_settings(
+    production=_PRODUCTION,
+    email_host=EMAIL_HOST,
+    email_backend=EMAIL_BACKEND,
+)
 
 # ---------------------------------------------------------------------------
 # Paynow Zimbabwe payment gateway

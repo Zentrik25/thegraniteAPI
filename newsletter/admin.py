@@ -57,10 +57,14 @@ class SubscriberAdmin(admin.ModelAdmin):
     def confirmed_badge(self, obj):
         if obj.confirmed:
             return format_html(
-                '<span style="background:#16a34a;color:#fff;padding:2px 8px;'
-                'border-radius:4px;font-size:11px;font-weight:700;">CONFIRMED</span>'
+                '<span style="background:{};color:#fff;padding:2px 8px;'
+                'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+                "#16a34a",
+                "CONFIRMED",
             )
         return format_html(
-            '<span style="background:#d97706;color:#fff;padding:2px 8px;'
-            'border-radius:4px;font-size:11px;font-weight:700;">PENDING</span>'
+            '<span style="background:{};color:#fff;padding:2px 8px;'
+            'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+            "#d97706",
+            "PENDING",
         )

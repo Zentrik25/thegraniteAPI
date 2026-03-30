@@ -283,3 +283,53 @@ class MediaDeleteAPITests(APITestCase):
         self.client.force_authenticate(self.author)
         self.client.delete(f"/api/v1/media/{self.asset_id}/")
         self.assertFalse(MediaAsset.objects.filter(pk=self.asset_id).exists())
+
+
+@override_settings(MEDIA_ROOT=TEMP_MEDIA)
+class MediaDetailAccessTests(APITestCase):
+    """
+    GET /api/v1/media/<id>/ — ownership guard matches list view.
+
+    Authors must only be able to retrieve their own assets.
+    Editors and above may retrieve any asset.
+    """
+
+    def setUp(self):
+        self.author  = make_user("det_author", role="author")
+        self.other   = make_user("det_other",  role="author")
+        self.editor  = make_user("det_editor", role="editor")
+
+        # Upload one asset as `author`
+        self.client.force_authenticate(self.author)
+        r = self.client.post(
+            "/api/v1/media/",
+            {"file": make_image_file()},
+            format="multipart",
+        )
+        self.asset_id = r.data["id"]
+
+    def test_owner_can_retrieve_own_asset(self):
+        """Author can GET their own asset detail."""
+        self.client.force_authenticate(self.author)
+        r = self.client.get(f"/api/v1/media/{self.asset_id}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["id"], self.asset_id)
+
+    def test_other_author_cannot_retrieve_asset(self):
+        """Another author gets 404, not a 403 that leaks existence."""
+        self.client.force_authenticate(self.other)
+        r = self.client.get(f"/api/v1/media/{self.asset_id}/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_editor_can_retrieve_any_asset(self):
+        """Editor (can_edit_any_article=True) can GET any author's asset."""
+        self.client.force_authenticate(self.editor)
+        r = self.client.get(f"/api/v1/media/{self.asset_id}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["id"], self.asset_id)
+
+    def test_unauthenticated_cannot_retrieve(self):
+        """Unauthenticated requests are rejected."""
+        self.client.force_authenticate(None)
+        r = self.client.get(f"/api/v1/media/{self.asset_id}/")
+        self.assertEqual(r.status_code, 401)

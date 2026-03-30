@@ -262,7 +262,10 @@ class AccountEmailTaskTests(TestCase):
             f"http://frontend.test/verify-email?token={token}",
             mail.outbox[0].body,
         )
-        self.assertNotIn(token, "\n".join(captured.output))
+        log_output = "\n".join(captured.output)
+        self.assertNotIn(token, log_output)
+        # Raw email address must not appear — only masked form is acceptable.
+        self.assertNotIn("taskreader@example.com", log_output)
 
     def test_send_password_reset_email_builds_frontend_url_and_does_not_log_token(self):
         from .tasks import send_password_reset_email
@@ -284,7 +287,10 @@ class AccountEmailTaskTests(TestCase):
             f"http://frontend.test/reset-password?token={token}",
             mail.outbox[0].body,
         )
-        self.assertNotIn(token, "\n".join(captured.output))
+        log_output = "\n".join(captured.output)
+        self.assertNotIn(token, log_output)
+        # Raw email address must not appear — only masked form is acceptable.
+        self.assertNotIn("taskreader@example.com", log_output)
 
 
 # ---------------------------------------------------------------------------

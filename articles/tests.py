@@ -347,3 +347,93 @@ class ArticleAPITests(APITestCase):
         r = self.client.get("/api/articles/featured/")
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertTrue(len(r.data) > 0)
+
+
+# ---------------------------------------------------------------------------
+# Permission consistency — role model vs raw is_staff
+# ---------------------------------------------------------------------------
+
+class ArticlePermissionConsistencyTests(APITestCase):
+    """
+    Verify that article list/detail queryset scoping and object-level write
+    guards use the project's role model (can_edit_any_article) consistently,
+    not just the raw Django is_staff flag.
+
+    These tests confirm:
+      - Anonymous users see only published articles.
+      - Editors (can_edit_any_article=True) see all statuses.
+      - Authors (can_edit_any_article=False) see only published articles.
+      - An editor can PATCH any article (not their own).
+      - An author cannot PATCH another author's article.
+      - An author can PATCH their own draft.
+    """
+
+    def setUp(self):
+        self.cat    = Category.objects.create(name="PermTestCat")
+        self.editor = make_user("perm_editor", role="editor")
+        self.author = make_user("perm_author", role="author")
+        self.other  = make_user("perm_other",  role="author")
+
+        self.published = make_article(
+            self.editor,
+            title="Published",
+            art_status=PublishStatus.PUBLISHED,
+            category=self.cat,
+        )
+        self.draft = make_article(
+            self.author,
+            title="Draft",
+            art_status=PublishStatus.DRAFT,
+            category=self.cat,
+        )
+
+    def test_anonymous_sees_only_published_in_list(self):
+        r = self.client.get("/api/articles/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        titles = [a["title"] for a in r.data["results"]]
+        self.assertIn("Published", titles)
+        self.assertNotIn("Draft", titles)
+
+    def test_editor_sees_drafts_in_list(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.get("/api/articles/")
+        titles = [a["title"] for a in r.data["results"]]
+        self.assertIn("Draft", titles)
+
+    def test_author_sees_only_published_in_list(self):
+        """Authors do not have can_edit_any_article — they see published only."""
+        self.client.force_authenticate(self.author)
+        r = self.client.get("/api/articles/")
+        titles = [a["title"] for a in r.data["results"]]
+        self.assertIn("Published", titles)
+        self.assertNotIn("Draft", titles)
+
+    def test_editor_can_patch_any_article(self):
+        """Editors have can_edit_any_article=True and may PATCH articles they didn't write."""
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch(
+            f"/api/articles/{self.draft.slug}/",
+            {"title": "Draft — editor updated"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+
+    def test_author_cannot_patch_other_authors_article(self):
+        """Author without editor role cannot PATCH another author's article."""
+        self.client.force_authenticate(self.other)
+        r = self.client.patch(
+            f"/api/articles/{self.draft.slug}/",
+            {"title": "Hijacked"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_author_can_patch_own_article(self):
+        """Authors can PATCH their own articles (obj.author == request.user)."""
+        self.client.force_authenticate(self.author)
+        r = self.client.patch(
+            f"/api/articles/{self.draft.slug}/",
+            {"title": "Draft — author updated"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)

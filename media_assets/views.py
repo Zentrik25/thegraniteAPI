@@ -130,10 +130,13 @@ class MediaDetailView(APIView):
     permission_classes = [IsAuthenticated, IsAuthorOrAbove]
 
     def get(self, request, pk):
-        asset = get_object_or_404(
-            MediaAsset.objects.select_related("uploaded_by"),
-            pk=pk,
-        )
+        qs = MediaAsset.objects.select_related("uploaded_by")
+        # Non-editors may only retrieve their own assets — same restriction as
+        # the list view.  404 is intentional: it avoids leaking asset existence
+        # to other authors via a distinguishable 403 response.
+        if not request.user.can_edit_any_article:
+            qs = qs.filter(uploaded_by=request.user)
+        asset = get_object_or_404(qs, pk=pk)
         return Response(MediaAssetSerializer(asset).data)
 
     def delete(self, request, pk):

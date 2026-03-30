@@ -160,6 +160,103 @@ class SecurityConfigurationTests(TestCase):
         self.assertEqual(project_settings_module.SECURE_HSTS_SECONDS, 0)
 
 
+class EmailConfigurationTests(TestCase):
+    """
+    Guard that _validate_email_settings fails fast in production when
+    EMAIL_HOST is still pointing at localhost, and is relaxed in non-production.
+    """
+
+    _smtp = "django.core.mail.backends.smtp.EmailBackend"
+
+    def test_production_smtp_with_localhost_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            project_settings_module._validate_email_settings(
+                production=True,
+                email_host="localhost",
+                email_backend=self._smtp,
+            )
+
+    def test_production_smtp_with_127_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            project_settings_module._validate_email_settings(
+                production=True,
+                email_host="127.0.0.1",
+                email_backend=self._smtp,
+            )
+
+    def test_production_smtp_with_real_host_passes(self):
+        # Should not raise for a real SMTP relay.
+        project_settings_module._validate_email_settings(
+            production=True,
+            email_host="smtp.sendgrid.net",
+            email_backend=self._smtp,
+        )
+
+    def test_production_console_backend_is_not_checked(self):
+        # Console backend is never SMTP — validation does not apply.
+        project_settings_module._validate_email_settings(
+            production=True,
+            email_host="localhost",
+            email_backend="django.core.mail.backends.console.EmailBackend",
+        )
+
+    def test_debug_runtime_skips_email_check(self):
+        # No error even with SMTP + localhost in non-production mode.
+        project_settings_module._validate_email_settings(
+            production=False,
+            email_host="localhost",
+            email_backend=self._smtp,
+        )
+
+    def test_current_test_run_passes_email_check(self):
+        # The test run uses locmem backend — validation must never block tests.
+        self.assertFalse(project_settings_module._PRODUCTION)
+
+
+class CeleryEagerModeTests(TestCase):
+    """
+    Guard that CELERY_TASK_ALWAYS_EAGER is on in tests but off by default
+    for non-test environments.
+
+    These tests cannot cover the production runtime directly (that would
+    require a separate settings module), but they verify the two observable
+    conditions that the guard relies on:
+      1. _TESTING is True when Django's test runner is active.
+      2. The setting is therefore True in the current (test) run.
+    """
+
+    def test_eager_mode_enabled_during_test_run(self):
+        """CELERY_TASK_ALWAYS_EAGER must be True when the test runner is active."""
+        from django.conf import settings as django_settings
+        self.assertTrue(
+            django_settings.CELERY_TASK_ALWAYS_EAGER,
+            "CELERY_TASK_ALWAYS_EAGER should be True during tests so tasks run "
+            "synchronously without a broker.",
+        )
+
+    def test_testing_flag_is_true_in_test_runner(self):
+        """_TESTING is True when 'test' is in sys.argv — i.e. right now."""
+        self.assertTrue(
+            project_settings_module._TESTING,
+            "_TESTING must be True during test runs so the eager-mode gate works.",
+        )
+
+    def test_env_flag_false_by_default(self):
+        """_env_flag returns False when the env var is absent — safe default for prod."""
+        import os
+        env_var = "CELERY_TASK_ALWAYS_EAGER"
+        original = os.environ.pop(env_var, None)
+        try:
+            self.assertFalse(
+                project_settings_module._env_flag(env_var, default=False),
+                "_env_flag must default to False so production stays async unless "
+                "explicitly opted in.",
+            )
+        finally:
+            if original is not None:
+                os.environ[env_var] = original
+
+
 class MaintenanceModeTests(TestCase):
 
     def test_normal_requests_pass_through(self):

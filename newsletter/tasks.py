@@ -4,6 +4,8 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 
+from core.logging_utils import _mask_email
+
 logger = logging.getLogger("newsletter.tasks")
 
 
@@ -43,7 +45,7 @@ def send_confirmation_email(subscriber_id: int) -> None:
             recipient_list=[subscriber.email],
             fail_silently=False,
         )
-        logger.info("Newsletter confirmation email sent: email=%s", subscriber.email)
+        logger.info("Newsletter confirmation email sent: email=%s", _mask_email(subscriber.email))
 
     except Exception as exc:
         logger.error(
@@ -75,7 +77,7 @@ def send_welcome_email(subscriber_id: int) -> None:
             recipient_list=[subscriber.email],
             fail_silently=False,
         )
-        logger.info("Newsletter welcome email sent: email=%s", subscriber.email)
+        logger.info("Newsletter welcome email sent: email=%s", _mask_email(subscriber.email))
     except Exception as exc:
         logger.error(
             "Failed to send welcome email for subscriber_id=%s: %s",

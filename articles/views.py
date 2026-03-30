@@ -43,12 +43,14 @@ from .serializers import (
 # ---------------------------------------------------------------------------
 
 class IsAuthorOrStaff(permissions.BasePermission):
-    """Authors may edit their own articles; staff may edit any article."""
+    """Authors may edit their own articles; editors and above may edit any article."""
 
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
             return True
-        return obj.author == request.user or request.user.is_staff
+        # Use the project role model rather than the raw is_staff flag, which is
+        # synced by signals and can diverge under bulk updates or test bypasses.
+        return obj.author == request.user or request.user.can_edit_any_article
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +71,13 @@ class ArticleListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         qs = Article.objects.with_related()
-        # Staff see all statuses; public see published only.
-        return qs.all() if self.request.user.is_staff else qs.published()
+        # Editors and above see all statuses; everyone else sees published only.
+        # Guard is_authenticated before accessing role properties — AnonymousUser
+        # does not have can_edit_any_article.
+        user = self.request.user
+        if user.is_authenticated and user.can_edit_any_article:
+            return qs.all()
+        return qs.published()
 
     def get_serializer_class(self):
         return ArticleWriteSerializer if self.request.method == "POST" else ArticleListSerializer
@@ -93,7 +100,14 @@ class ArticleDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         qs = Article.objects.with_related()
-        return qs.all() if self.request.user.is_staff else qs.published()
+        user = self.request.user
+        if user.is_authenticated and user.can_edit_any_article:
+            return qs.all()
+        # For write methods, return all articles so IsAuthorOrStaff can fire
+        # at object-level and return 403 rather than a misleading 404.
+        if self.request.method in ("PUT", "PATCH", "DELETE"):
+            return qs.all()
+        return qs.published()
 
     def get_serializer_class(self):
         return ArticleWriteSerializer if self.request.method in ("PUT", "PATCH") else ArticleDetailSerializer

@@ -1,7 +1,6 @@
 import functools
 import hashlib
 import logging
-import time
 from typing import Any, Callable, Optional
 
 from django.conf import settings
@@ -42,7 +41,8 @@ def get_or_set_cache(
         return value
 
     if cache.get(lock_key):
-        time.sleep(0.05)
+        # Another worker is computing — check once more without blocking.
+        # If still missing we'll compute too; that's an acceptable rare race.
         value = cache.get(full_key)
         if value is not None:
             return value

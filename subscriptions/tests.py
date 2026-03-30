@@ -162,6 +162,8 @@ class PlanListTests(TestCase):
     """GET /api/v1/subscriptions/plans/ — public, no auth required."""
 
     def setUp(self) -> None:
+        from django.core.cache import cache as _cache
+        _cache.clear()  # plan list is cached; clear so each test sees fresh DB state
         self.client = APIClient()
         self.free_plan    = _make_free_plan()
         self.premium_plan = _make_premium_plan()
