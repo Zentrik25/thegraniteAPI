@@ -88,11 +88,13 @@ class SectionAdmin(admin.ModelAdmin):
         if obj.is_active:
             return format_html(
                 '<span style="background:#16a34a;color:#fff;padding:2px 8px;'
-                'border-radius:4px;font-size:11px;font-weight:700;">ACTIVE</span>'
+                'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+                "ACTIVE",
             )
         return format_html(
             '<span style="background:#dc2626;color:#fff;padding:2px 8px;'
-            'border-radius:4px;font-size:11px;font-weight:700;">INACTIVE</span>'
+            'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+            "INACTIVE",
         )
 
     @admin.display(description="Nav", ordering="is_primary")
@@ -100,11 +102,13 @@ class SectionAdmin(admin.ModelAdmin):
         if obj.is_primary:
             return format_html(
                 '<span style="background:#2563eb;color:#fff;padding:2px 8px;'
-                'border-radius:4px;font-size:11px;font-weight:700;">PRIMARY</span>'
+                'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+                "PRIMARY",
             )
         return format_html(
             '<span style="background:#6b7280;color:#fff;padding:2px 8px;'
-            'border-radius:4px;font-size:11px;font-weight:700;">SECONDARY</span>'
+            'border-radius:4px;font-size:11px;font-weight:700;">{}</span>',
+            "SECONDARY",
         )
 
     @admin.display(description="Articles", ordering="_article_count")

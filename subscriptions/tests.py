@@ -311,6 +311,42 @@ class PaywallMiddlewareTests(TestCase):
         response = self.client.get(self._article_url(article.slug), **headers)
         self.assertEqual(response.status_code, 402)
 
+    def test_free_plan_reader_jwt_does_not_bypass_paywall(self) -> None:
+        """
+        A reader JWT must NOT be treated as a staff token.
+
+        Before the fix, _is_staff_token() returned True for any valid
+        access token because both staff and reader tokens have
+        token_type == "access".  A free-plan reader could access premium
+        articles for free by sending their reader JWT.
+        """
+        _make_active_subscription(self.reader, self.free_plan)
+        headers = _reader_auth_headers(self.reader)
+        article = _make_article(self.staff_user, title="Bypass Test", is_premium=True)
+        response = self.client.get(self._article_url(article.slug), **headers)
+        # Must be 402 — the reader JWT must not pass the staff bypass check
+        self.assertEqual(response.status_code, 402)
+
+    def test_reader_without_subscription_jwt_does_not_bypass_paywall(self) -> None:
+        """Reader with a valid JWT but no subscription must still get 402."""
+        headers = _reader_auth_headers(self.reader)
+        article = _make_article(self.staff_user, title="No Sub Bypass Test", is_premium=True)
+        response = self.client.get(self._article_url(article.slug), **headers)
+        self.assertEqual(response.status_code, 402)
+
+    @override_settings(FRONTEND_URL="https://thegranite.co.zw")
+    def test_402_upgrade_url_uses_frontend_url_setting(self) -> None:
+        """upgrade_url in the 402 response must be built from FRONTEND_URL."""
+        article = _make_article(self.staff_user, title="Upgrade URL Test", is_premium=True)
+        response = self.client.get(self._article_url(article.slug))
+        self.assertEqual(response.status_code, 402)
+        data = response.json()
+        self.assertIn("upgrade_url", data)
+        self.assertTrue(
+            data["upgrade_url"].startswith("https://thegranite.co.zw"),
+            msg=f"Expected FRONTEND_URL prefix, got: {data['upgrade_url']}",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Subscribe

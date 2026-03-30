@@ -466,6 +466,15 @@ CLOUDFLARE_IPS = [
     "2c0f:f248::/32",
 ]
 
+# Trusted non-Cloudflare reverse proxies. X-Forwarded-For is only trusted
+# when REMOTE_ADDR is in this list. Empty by default — add your load balancer
+# CIDR(s) when deploying behind a non-Cloudflare proxy.
+TRUSTED_PROXIES = [
+    cidr.strip()
+    for cidr in os.environ.get("TRUSTED_PROXIES", "").split(",")
+    if cidr.strip()
+]
+
 # Cache-purge API credentials (set in .env — safe to leave blank in dev)
 CLOUDFLARE_ZONE_ID   = os.environ.get("CLOUDFLARE_ZONE_ID",   "")
 CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")

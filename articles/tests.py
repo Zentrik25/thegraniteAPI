@@ -161,6 +161,24 @@ class TopStoryRankTests(TestCase):
         a = make_published(self.user)
         self.assertFalse(a.needs_banner)
 
+    def test_is_top_story_cleared_when_rank_removed(self):
+        """Removing top_story_rank must also clear is_top_story (bidirectional sync)."""
+        a = make_published(self.user, top_story_rank=2)
+        self.assertTrue(a.is_top_story)
+        a.top_story_rank = None
+        a.save()
+        a.refresh_from_db()
+        self.assertFalse(a.is_top_story)
+
+    def test_is_featured_cleared_when_rank_removed(self):
+        """Removing featured_rank must also clear is_featured."""
+        a = make_published(self.user, featured_rank=1)
+        self.assertTrue(a.is_featured)
+        a.featured_rank = None
+        a.save()
+        a.refresh_from_db()
+        self.assertFalse(a.is_featured)
+
 
 # ---------------------------------------------------------------------------
 # Signals — rank enforcement
@@ -353,7 +371,7 @@ class ArticleAPITests(APITestCase):
         self.article.save()
         r = self.client.get("/api/articles/featured/")
         self.assertEqual(r.status_code, status.HTTP_200_OK)
-        self.assertTrue(len(r.data) > 0)
+        self.assertTrue(len(r.data["results"]) > 0)
 
 
 # ---------------------------------------------------------------------------
@@ -602,3 +620,41 @@ class ArticlePermissionConsistencyTests(APITestCase):
         """Same guard applies to DELETE (archive) — must not reach object level."""
         r = self.client.delete(f"/api/articles/{self.published.slug}/")
         self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_unauthenticated_patch_draft_returns_404_not_403(self):
+        """
+        Unauthenticated request must not receive 403 for a draft slug — that would
+        reveal the article's existence.  The get_queryset guard (published-only for
+        unauthenticated requests) must return 404 before any permission check fires.
+        """
+        # self.draft already exists in this class's setUp
+        # Confirm the draft is invisible on the public feed
+        r_list = self.client.get("/api/articles/")
+        titles = [a["title"] for a in r_list.data["results"]]
+        self.assertNotIn(self.draft.title, titles)
+        # A crafted PATCH targeting the draft slug must not reveal its existence
+        r = self.client.patch(
+            f"/api/articles/{self.draft.slug}/",
+            {"title": "Hijacked"},
+            format="json",
+        )
+        # 401 (not authenticated) is fine; 403 or 200 would leak existence
+        self.assertEqual(r.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_breaking_news_response_is_paginated(self):
+        """BreakingNewsView must return a paginated envelope, not a bare list."""
+        self.published.is_breaking = True
+        self.published.save()
+        r = self.client.get("/api/articles/breaking/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("results", r.data)
+        self.assertIn("count", r.data)
+
+    def test_featured_response_is_paginated(self):
+        """FeaturedArticlesView must return a paginated envelope, not a bare list."""
+        self.published.featured_rank = 1
+        self.published.save()
+        r = self.client.get("/api/articles/featured/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("results", r.data)
+        self.assertIn("count", r.data)

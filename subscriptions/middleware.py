@@ -135,11 +135,15 @@ Only intercepts GET/HEAD requests matching /api/v1/articles/<slug>/.
             ]
             cache.set(_PLANS_CACHE_KEY, upgrade_plans, _PLANS_CACHE_TTL)
 
+        from django.conf import settings as _settings
+        frontend_base = getattr(_settings, "FRONTEND_URL", "").rstrip("/")
+        upgrade_url   = f"{frontend_base}/subscription/upgrade/" if frontend_base else "/subscription/upgrade/"
+
         return JsonResponse(
             {
                 "detail": "This article is for premium subscribers only.",
                 "code":   "premium_required",
-                "upgrade_url": "/subscription/upgrade/",
+                "upgrade_url": upgrade_url,
                 "upgrade_plans": upgrade_plans,
             },
             status=402,
@@ -187,7 +191,12 @@ def _get_article_premium_flag(slug: str):
 
 def _is_staff_token(raw_token: str) -> bool:
     """
-    Return True if *raw_token* is a valid staff access token (token_type='access').
+    Return True if *raw_token* is a valid **staff** access token.
+
+    Both staff and reader access tokens have token_type == "access".
+    The distinguishing claim is reader_id, which is present only in reader
+    tokens (issued by ReaderAccessToken).  A token without reader_id that
+    validates as a SimpleJWT AccessToken belongs to a StaffUser.
 
     Validates the token using SimpleJWT without hitting the database.
     Returns False on any error.
@@ -195,8 +204,11 @@ def _is_staff_token(raw_token: str) -> bool:
     try:
         from rest_framework_simplejwt.tokens import AccessToken
         token = AccessToken(raw_token)
-        # Staff tokens have token_type == "access"
-        return token.get("token_type") == "access"
+        # reader_id is injected into reader tokens only; staff tokens never carry it.
+        return (
+            token.get("token_type") == "access"
+            and token.get("reader_id") is None
+        )
     except Exception:  # noqa: BLE001
         return False
 

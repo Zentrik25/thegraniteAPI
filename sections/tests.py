@@ -1,3 +1,4 @@
+from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework import status
@@ -5,6 +6,7 @@ from rest_framework.test import APITestCase
 
 from articles.models import Article, Category, PublishStatus
 
+from .admin import SectionAdmin
 from .models import Section
 
 User = get_user_model()
@@ -106,6 +108,23 @@ class SectionModelTests(TestCase):
         make_category("Local Business", section=section)
         make_category("International Business", section=section)
         self.assertEqual(section.category_count, 2)
+
+
+class SectionAdminTests(TestCase):
+
+    def setUp(self):
+        self.admin = SectionAdmin(Section, AdminSite())
+
+    def test_is_active_badge_renders_without_type_error(self):
+        section = make_section("Admin Active", is_active=True)
+        badge = self.admin.is_active_badge(section)
+        self.assertIn("ACTIVE", str(badge))
+
+    def test_is_primary_badge_renders_without_type_error(self):
+        section = make_section("Admin Secondary")
+        section.is_primary = False
+        badge = self.admin.is_primary_badge(section)
+        self.assertIn("SECONDARY", str(badge))
 
 
 # ---------------------------------------------------------------------------

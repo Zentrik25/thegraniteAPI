@@ -115,9 +115,13 @@ class ArticleDetailView(generics.RetrieveUpdateDestroyAPIView):
         user = self.request.user
         if user.is_authenticated and user.can_edit_any_article:
             return qs.all()
-        # For write methods, return all articles so IsAuthorOrStaff can fire
-        # at object-level and return 403 rather than a misleading 404.
-        if self.request.method in ("PUT", "PATCH", "DELETE"):
+        # For write methods from authenticated users, return all articles so
+        # IsAuthorOrStaff can fire at object-level and return 403 rather than
+        # a misleading 404.  Unauthenticated write attempts are rejected by
+        # has_permission before reaching get_object, so there is no need to
+        # broaden the queryset for them — and doing so would let an anon GET
+        # a draft/review article body via a crafted PATCH URL.
+        if self.request.method in ("PUT", "PATCH", "DELETE") and user.is_authenticated:
             return qs.all()
         return qs.published()
 
@@ -146,6 +150,7 @@ class BreakingNewsView(generics.ListAPIView):
 
     serializer_class   = ArticleListSerializer
     permission_classes = [permissions.AllowAny]
+    pagination_class   = StandardResultsPagination
 
     def get_queryset(self):
         return Article.objects.breaking().with_related().order_by("-published_at")
@@ -186,6 +191,7 @@ class FeaturedArticlesView(generics.ListAPIView):
 
     serializer_class   = ArticleListSerializer
     permission_classes = [permissions.AllowAny]
+    pagination_class   = StandardResultsPagination
 
     def get_queryset(self):
         return Article.objects.featured().with_related()

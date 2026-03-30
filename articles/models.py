@@ -445,10 +445,12 @@ class Article(TimeStampedModel):
             self.is_premium = False
 
         # 2. Auto-sync boolean placement flags from their rank fields.
-        if self.top_story_rank is not None:
-            self.is_top_story = True
-        if self.featured_rank is not None:
-            self.is_featured = True
+        # Both directions: set True when rank is assigned, clear to False when
+        # rank is removed.  Without the False branch, clearing top_story_rank
+        # leaves is_top_story=True and the article stays in the top-story grid
+        # even after the editor removes it from the slot.
+        self.is_top_story = self.top_story_rank is not None
+        self.is_featured  = self.featured_rank  is not None
 
         # 3. Stamp published_at the first time the article goes live.
         if self.status == PublishStatus.PUBLISHED and self.published_at is None:
