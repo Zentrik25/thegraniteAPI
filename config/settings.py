@@ -142,7 +142,6 @@ INSTALLED_APPS = [
     "accounts.apps.AccountsConfig",
     "advertising.apps.AdvertisingConfig",
     "notifications.apps.NotificationsConfig",
-    "subscription.apps.SubscriptionConfig",
     "subscriptions.apps.SubscriptionsConfig",
 ]
 

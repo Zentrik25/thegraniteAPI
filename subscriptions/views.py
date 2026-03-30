@@ -73,6 +73,9 @@ from .tasks import process_paynow_callback
 
 logger = logging.getLogger("subscriptions.views")
 
+PAYMENT_GATEWAY_ERROR_DETAIL = "Unable to initiate payment right now. Please try again."
+PAYMENT_STATUS_ERROR_DETAIL = "Unable to verify payment status right now. Please refresh and try again."
+
 
 # ---------------------------------------------------------------------------
 # Public
@@ -256,7 +259,7 @@ class SubscribeView(APIView):
                 _mask_email(reader.email),
             )
             return Response(
-                {"detail": f"Payment gateway error: {result['error']}"},
+                {"detail": PAYMENT_GATEWAY_ERROR_DETAIL},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -351,7 +354,7 @@ class CancelSubscriptionView(APIView):
 
         logger.info(
             "[Cancel] Subscription cancelled: reader=%s sub=%s immediate=%s",
-            request.user.email,
+            _mask_email(request.user.email),
             subscription.id,
             cancel_immediately,
         )
@@ -517,7 +520,7 @@ class PaynowPollView(APIView):
             return Response({
                 "paid":   False,
                 "status": payment.status,
-                "error":  result["error"],
+                "error":  PAYMENT_STATUS_ERROR_DETAIL,
             })
 
         if result["paid"]:

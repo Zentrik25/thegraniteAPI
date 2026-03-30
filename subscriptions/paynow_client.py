@@ -24,6 +24,9 @@ from django.conf import settings
 
 logger = logging.getLogger("subscriptions.paynow_client")
 
+PAYMENT_INITIATION_ERROR = "Unable to initiate payment right now. Please try again."
+PAYMENT_STATUS_ERROR = "Unable to verify payment status right now. Please refresh and try again."
+
 # ---------------------------------------------------------------------------
 # Callback hash verification
 # ---------------------------------------------------------------------------
@@ -145,7 +148,6 @@ class PaynowClient:
                     "error":        "",
                 }
 
-            error_msg = getattr(response, "error", "Paynow rejected the payment.")
             logger.warning(
                 "[Paynow] Mobile payment rejected: provider=%s",
                 provider,
@@ -155,7 +157,7 @@ class PaynowClient:
                 "reference":    "",
                 "poll_url":     "",
                 "redirect_url": "",
-                "error":        str(error_msg),
+                "error":        PAYMENT_INITIATION_ERROR,
             }
 
         except Exception as exc:  # noqa: BLE001
@@ -169,7 +171,7 @@ class PaynowClient:
                 "reference":    "",
                 "poll_url":     "",
                 "redirect_url": "",
-                "error":        str(exc),
+                "error":        PAYMENT_INITIATION_ERROR,
             }
 
     # ------------------------------------------------------------------
@@ -225,14 +227,13 @@ class PaynowClient:
                     "error":        "",
                 }
 
-            error_msg = getattr(response, "error", "Paynow rejected the payment.")
             logger.warning("[Paynow] Web payment rejected.")
             return {
                 "ok":           False,
                 "reference":    "",
                 "poll_url":     "",
                 "redirect_url": "",
-                "error":        str(error_msg),
+                "error":        PAYMENT_INITIATION_ERROR,
             }
 
         except Exception as exc:  # noqa: BLE001
@@ -245,7 +246,7 @@ class PaynowClient:
                 "reference":    "",
                 "poll_url":     "",
                 "redirect_url": "",
-                "error":        str(exc),
+                "error":        PAYMENT_INITIATION_ERROR,
             }
 
     # ------------------------------------------------------------------
@@ -302,5 +303,5 @@ class PaynowClient:
                 "reference": "",
                 "amount":    0.0,
                 "status":    "",
-                "error":     str(exc),
+                "error":     PAYMENT_STATUS_ERROR,
             }

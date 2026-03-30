@@ -23,6 +23,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from django.conf import settings
+from django.core import mail
 from django.core.cache import cache, caches
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
@@ -395,6 +396,41 @@ class SubscribeViewTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
         self.assertEqual(Subscription.objects.count(), before_count)
+
+    @patch("subscriptions.views.PaynowClient")
+    def test_subscribe_paynow_failure_hides_raw_gateway_error(
+        self, mock_paynow_cls: MagicMock
+    ) -> None:
+        """Frontend error text must stay generic on subscription payment failures."""
+        sensitive_error = "Paynow unavailable at 10.0.0.4"
+        mock_client = MagicMock()
+        mock_client.initiate_mobile_payment.return_value = {
+            "ok":    False,
+            "error": sensitive_error,
+            "reference": "",
+            "poll_url": "",
+            "redirect_url": "",
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        headers = _reader_auth_headers(self.reader)
+        response = self.client.post(
+            "/api/v1/subscriptions/subscribe/",
+            {
+                "plan_slug":      "premium",
+                "payment_method": PaymentMethod.ECOCASH,
+                "phone_number":   "0771234567",
+            },
+            format="json",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(
+            response.json()["detail"],
+            "Unable to initiate payment right now. Please try again.",
+        )
+        self.assertNotIn(sensitive_error, response.json()["detail"])
 
     @patch("subscriptions.views.PaynowClient")
     def test_subscribe_logs_do_not_expose_payment_reference_or_urls(
@@ -801,6 +837,34 @@ class PaynowPollViewTests(TestCase):
         self.assertEqual(second.status_code, status.HTTP_200_OK)
         self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
+    @patch("subscriptions.views.PaynowClient")
+    def test_poll_gateway_failure_hides_raw_error(self, mock_paynow_cls: MagicMock) -> None:
+        """Poll responses must not expose raw upstream error strings."""
+        sensitive_error = "Paynow timeout talking to host 10.0.0.7"
+        mock_client = MagicMock()
+        mock_client.check_payment_status.return_value = {
+            "ok":        False,
+            "paid":      False,
+            "reference": "",
+            "amount":    0.0,
+            "status":    "",
+            "error":     sensitive_error,
+        }
+        mock_paynow_cls.return_value = mock_client
+
+        response = self.client.get(
+            f"/api/v1/subscriptions/paynow-poll/{self.payment.id}/",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["paid"], False)
+        self.assertEqual(
+            response.json()["error"],
+            "Unable to verify payment status right now. Please refresh and try again.",
+        )
+        self.assertNotIn(sensitive_error, response.json()["error"])
+
     @patch("subscriptions.paynow_client.PaynowClient")
     def test_poll_after_callback_processing_returns_completed_without_reactivation(
         self, mock_paynow_cls: MagicMock
@@ -1057,6 +1121,22 @@ class CancelSubscriptionTests(TestCase):
             **headers,
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cancel_logs_masked_reader_email_only(self) -> None:
+        """Cancellation logs should not emit the reader's raw email address."""
+        headers = _reader_auth_headers(self.reader)
+
+        with self.assertLogs("subscriptions.views", level="INFO") as captured:
+            response = self.client.post(
+                "/api/v1/subscriptions/cancel/",
+                {"cancel_immediately": False},
+                format="json",
+                **headers,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        output = "\n".join(captured.output)
+        self.assertNotIn(self.reader.email, output)
 
 
 # ---------------------------------------------------------------------------
@@ -1381,6 +1461,43 @@ class OneMoneyProviderTests(TestCase):
         self.assertNotIn(secret_poll_url, output)
         self.assertNotIn("PAYNOW-POLL-SECRET", output)
 
+    def test_paynow_client_mobile_rejection_hides_raw_gateway_error(self) -> None:
+        """Rejected mobile payments should not return provider error strings verbatim."""
+        from subscriptions.paynow_client import PAYMENT_INITIATION_ERROR
+
+        client, mock_sdk = self._make_paynow_client_with_mock_sdk()
+        mock_sdk.send_mobile.return_value = MagicMock(
+            success=False,
+            error="Provider detail: phone number blocked on host 10.0.0.8",
+        )
+
+        result = client.initiate_mobile_payment(
+            amount_usd=2.00,
+            phone="0771234567",
+            email="reader@test.com",
+            reference="sub-test",
+            payment_method="ECOCASH",
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], PAYMENT_INITIATION_ERROR)
+
+    def test_paynow_client_poll_exception_hides_raw_error(self) -> None:
+        """Poll exceptions should collapse to a stable generic error message."""
+        from subscriptions.paynow_client import PAYMENT_STATUS_ERROR
+
+        client, mock_sdk = self._make_paynow_client_with_mock_sdk()
+        mock_sdk.check_transaction_status.side_effect = RuntimeError(
+            "socket timeout to secret host"
+        )
+
+        result = client.check_payment_status(
+            "https://www.paynow.co.zw/interface/CheckPayment/?guid=test"
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], PAYMENT_STATUS_ERROR)
+
 
 # ---------------------------------------------------------------------------
 # Payment safety — cancel_at_period_end ordering fix
@@ -1585,6 +1702,89 @@ class RenewalReminderQueueTests(TestCase):
         queue_renewal_reminders()
 
         mock_reminder_task.delay.assert_called_once_with(str(eligible.id))
+
+
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="noreply@test.com",
+    FRONTEND_URL="http://frontend.test",
+)
+class RenewalReminderEmailTests(TestCase):
+    """send_renewal_reminder should deliver a real email safely."""
+
+    def setUp(self) -> None:
+        self.reader = _make_reader(email="renew@test.com", username="renewreader")
+        self.plan = _make_premium_plan()
+        self.subscription = Subscription.objects.create(
+            reader=self.reader,
+            plan=self.plan,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=django_tz.now(),
+            current_period_start=date.today() - timedelta(days=27),
+            current_period_end=date.today() + timedelta(days=3),
+        )
+
+    def test_send_renewal_reminder_sends_email(self) -> None:
+        from subscriptions.tasks import send_renewal_reminder
+
+        with self.assertLogs("subscriptions.tasks", level="INFO") as captured:
+            send_renewal_reminder(str(self.subscription.id))
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.reader.email])
+        self.assertIn("subscription renews in", mail.outbox[0].subject.lower())
+        self.assertIn("http://frontend.test", mail.outbox[0].body)
+        self.assertNotIn(self.reader.email, "\n".join(captured.output))
+
+    def test_send_renewal_reminder_missing_subscription_noop(self) -> None:
+        """Non-existent subscription ID logs warning and sends no email."""
+        from subscriptions.tasks import send_renewal_reminder
+
+        with self.assertLogs("subscriptions.tasks", level="WARNING") as captured:
+            send_renewal_reminder("00000000-0000-0000-0000-000000000000")
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("not found", "\n".join(captured.output))
+
+    def test_send_renewal_reminder_expired_subscription_noop(self) -> None:
+        """EXPIRED subscription is ineligible — logs info and sends no email."""
+        from subscriptions.tasks import send_renewal_reminder
+
+        self.subscription.status = SubscriptionStatus.EXPIRED
+        self.subscription.save(update_fields=["status"])
+
+        with self.assertLogs("subscriptions.tasks", level="INFO") as captured:
+            send_renewal_reminder(str(self.subscription.id))
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("no longer eligible", "\n".join(captured.output))
+
+    def test_send_renewal_reminder_cancel_at_period_end_noop(self) -> None:
+        """Subscription flagged cancel_at_period_end is ineligible — no email."""
+        from subscriptions.tasks import send_renewal_reminder
+
+        self.subscription.cancel_at_period_end = True
+        self.subscription.save(update_fields=["cancel_at_period_end"])
+
+        with self.assertLogs("subscriptions.tasks", level="INFO") as captured:
+            send_renewal_reminder(str(self.subscription.id))
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("no longer eligible", "\n".join(captured.output))
+
+    def test_send_renewal_reminder_retries_on_mail_failure(self) -> None:
+        """SMTP failure triggers Celery retry — same pattern as accounts/tasks."""
+        from subscriptions.tasks import send_renewal_reminder
+
+        with patch("subscriptions.tasks.send_mail", side_effect=RuntimeError("smtp down")), \
+             patch.object(
+                 send_renewal_reminder, "retry",
+                 side_effect=RuntimeError("retry-called"),
+             ) as mock_retry:
+            with self.assertRaises(RuntimeError):
+                send_renewal_reminder(str(self.subscription.id))
+
+        mock_retry.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

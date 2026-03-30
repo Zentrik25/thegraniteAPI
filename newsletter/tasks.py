@@ -15,11 +15,14 @@ def _build_newsletter_confirm_url(token) -> str:
 
 
 @shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
     queue="slow",
     ignore_result=True,
     name="newsletter.tasks.send_confirmation_email",
 )
-def send_confirmation_email(subscriber_id: int) -> None:
+def send_confirmation_email(self, subscriber_id: int) -> None:
     """
     Send a confirmation email to a new subscriber.
 
@@ -28,6 +31,14 @@ def send_confirmation_email(subscriber_id: int) -> None:
     try:
         from .models import Subscriber
         subscriber = Subscriber.objects.get(pk=subscriber_id)
+    except Subscriber.DoesNotExist:
+        logger.warning(
+            "Newsletter confirmation email skipped: subscriber_id=%s not found",
+            subscriber_id,
+        )
+        return
+
+    try:
 
         confirmation_url = _build_newsletter_confirm_url(
             subscriber.confirmation_token
@@ -46,27 +57,39 @@ def send_confirmation_email(subscriber_id: int) -> None:
             fail_silently=False,
         )
         logger.info("Newsletter confirmation email sent: email=%s", _mask_email(subscriber.email))
-
     except Exception as exc:
         logger.error(
-            "Failed to send confirmation email for subscriber_id=%s: %s",
+            "Failed to send confirmation email for subscriber_id=%s email=%s: %s",
             subscriber_id,
+            _mask_email(subscriber.email),
             exc,
         )
+        raise self.retry(exc=exc)
 
 
 @shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
     queue="slow",
     ignore_result=True,
     name="newsletter.tasks.send_welcome_email",
 )
-def send_welcome_email(subscriber_id: int) -> None:
+def send_welcome_email(self, subscriber_id: int) -> None:
     """
     Send a welcome email after a subscriber confirms.
     """
     try:
         from .models import Subscriber
         subscriber = Subscriber.objects.get(pk=subscriber_id)
+    except Subscriber.DoesNotExist:
+        logger.warning(
+            "Newsletter welcome email skipped: subscriber_id=%s not found",
+            subscriber_id,
+        )
+        return
+
+    try:
         send_mail(
             subject="Welcome to The Granite Post newsletter",
             message=(
@@ -80,7 +103,9 @@ def send_welcome_email(subscriber_id: int) -> None:
         logger.info("Newsletter welcome email sent: email=%s", _mask_email(subscriber.email))
     except Exception as exc:
         logger.error(
-            "Failed to send welcome email for subscriber_id=%s: %s",
+            "Failed to send welcome email for subscriber_id=%s email=%s: %s",
             subscriber_id,
+            _mask_email(subscriber.email),
             exc,
         )
+        raise self.retry(exc=exc)

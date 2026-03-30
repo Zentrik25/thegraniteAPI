@@ -1,7 +1,9 @@
 from unittest import skipUnless
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.search import SearchVector
+from django.core.cache import caches
 from django.db import connection
 from django.test import TestCase
 from rest_framework import status
@@ -85,6 +87,7 @@ class SearchSignalTests(TestCase):
 class ArticleSearchAPITests(APITestCase):
 
     def setUp(self):
+        caches["throttle"].clear()
         self.user = make_user("search_reporter")
         self.cat  = Category.objects.create(name="News")
 
@@ -109,6 +112,9 @@ class ArticleSearchAPITests(APITestCase):
             body    = "GDP figures released today show positive growth trends.",
             category = self.cat,
         )
+
+    def tearDown(self):
+        caches["throttle"].clear()
 
     # -- Basic search -------------------------------------------------------
 
@@ -200,6 +206,21 @@ class ArticleSearchAPITests(APITestCase):
         r = self.client.get("/api/v1/search/?q=zimbabwe&page_size=9999")
         self.assertLessEqual(len(r.data["results"]), 50)
 
+    def test_invalid_page_defaults_to_first_page(self):
+        r = self.client.get("/api/v1/search/?q=zimbabwe&page=not-a-number")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["current_page"], 1)
+
+    def test_invalid_page_size_defaults_instead_of_500(self):
+        r = self.client.get("/api/v1/search/?q=zimbabwe&page_size=invalid")
+        self.assertEqual(r.status_code, 200)
+        self.assertLessEqual(len(r.data["results"]), 20)
+
+    def test_zero_page_size_defaults_instead_of_500(self):
+        r = self.client.get("/api/v1/search/?q=zimbabwe&page_size=0")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreaterEqual(len(r.data["results"]), 1)
+
     def test_no_results_returns_empty_list(self):
         r = self.client.get("/api/v1/search/?q=xyznotaword123")
         self.assertEqual(r.status_code, 200)
@@ -211,6 +232,18 @@ class ArticleSearchAPITests(APITestCase):
     def test_search_is_public_no_auth_required(self):
         r = self.client.get("/api/v1/search/?q=zimbabwe")
         self.assertEqual(r.status_code, 200)
+
+    def test_search_endpoint_is_throttled(self):
+        from search.throttling import SearchRateThrottle
+
+        with patch.object(SearchRateThrottle, "rate", "2/min"):
+            first = self.client.get("/api/v1/search/?q=zimbabwe")
+            second = self.client.get("/api/v1/search/?q=zimbabwe")
+            third = self.client.get("/api/v1/search/?q=zimbabwe")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(third.status_code, 429)
 
     def test_drafts_not_in_search_results(self):
         draft = Article.objects.create(

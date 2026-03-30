@@ -4,6 +4,7 @@ from django.core.cache import caches
 from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
 from .models import Subscriber
 
@@ -203,6 +204,26 @@ class NewsletterEmailTaskTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["mailtask@reader.com"])
         self.assertIn("Welcome to The Granite Post newsletter", mail.outbox[0].subject)
+
+    def test_send_confirmation_email_retries_on_mail_failure(self):
+        from .tasks import send_confirmation_email
+
+        with patch("newsletter.tasks.send_mail", side_effect=RuntimeError("smtp down")), \
+             patch.object(send_confirmation_email, "retry", side_effect=RuntimeError("retry-called")) as mock_retry:
+            with self.assertRaises(RuntimeError):
+                send_confirmation_email(self.subscriber.pk)
+
+        mock_retry.assert_called_once()
+
+    def test_send_welcome_email_retries_on_mail_failure(self):
+        from .tasks import send_welcome_email
+
+        with patch("newsletter.tasks.send_mail", side_effect=RuntimeError("smtp down")), \
+             patch.object(send_welcome_email, "retry", side_effect=RuntimeError("retry-called")) as mock_retry:
+            with self.assertRaises(RuntimeError):
+                send_welcome_email(self.subscriber.pk)
+
+        mock_retry.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

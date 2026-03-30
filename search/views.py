@@ -14,7 +14,8 @@ from rest_framework.views import APIView
 from articles.models import Article
 from articles.serializers import ArticleListSerializer
 from core.cache import get_or_set_cache
-from core.pagination import StandardResultsPagination
+
+from .throttling import SearchRateThrottle
 
 logger = logging.getLogger("search.views")
 
@@ -73,13 +74,33 @@ class ArticleSearchView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes   = []
+    throttle_classes   = [SearchRateThrottle]
+
+    @staticmethod
+    def _parse_positive_int(raw_value, default: int) -> int:
+        """
+        Parse a positive integer query param without raising 500s on bad input.
+
+        Invalid, missing, zero, or negative values silently fall back to the
+        supplied default so the endpoint remains stable for the frontend.
+        """
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
 
     def get(self, request):
         query     = request.query_params.get("q", "").strip()
-        page      = request.query_params.get("page", 1)
+        page      = self._parse_positive_int(
+            request.query_params.get("page"),
+            default=1,
+        )
         page_size = min(
-            int(request.query_params.get("page_size", 20)),
+            self._parse_positive_int(
+                request.query_params.get("page_size"),
+                default=20,
+            ),
             50,
         )
 
@@ -103,7 +124,7 @@ class ArticleSearchView(APIView):
         cache_key = f"search:{query.lower()}:page{page}:size{page_size}"
 
         def compute():
-            return self._execute_search(query, int(page), page_size, request)
+            return self._execute_search(query, page, page_size, request)
 
         result = get_or_set_cache(cache_key, compute, ttl=SEARCH_CACHE_TTL)
         return Response(result)

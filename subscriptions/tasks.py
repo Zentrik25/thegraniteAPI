@@ -4,7 +4,7 @@ tasks.py — Celery tasks for the subscriptions app.
 Task inventory:
   check_expired_subscriptions()     — daily: mark overdue ACTIVE subscriptions EXPIRED
   queue_renewal_reminders()         — daily: enqueue reminder tasks for subscriptions ending soon
-  send_renewal_reminder(sub_id)     — email reader 3 days before period end (stub)
+  send_renewal_reminder(sub_id)     — email reader 3 days before period end
   process_paynow_callback(payment_id) — poll Paynow and activate subscription on success
 """
 
@@ -12,7 +12,11 @@ import logging
 from datetime import date, timedelta
 
 from celery import shared_task
+from django.conf import settings
 from django.core.cache import cache
+from django.core.mail import send_mail
+
+from core.logging_utils import _mask_email
 
 logger = logging.getLogger("subscriptions.tasks")
 
@@ -30,6 +34,15 @@ def _invalidate_subscription_status_cache(reader_ids: list[str]) -> None:
         "[subscriptions.tasks] Invalidated subscription cache for %d reader(s).",
         len(unique_reader_ids),
     )
+
+
+def _subscription_portal_url() -> str:
+    """Return the frontend location readers can use to manage subscriptions."""
+    return getattr(
+        settings,
+        "FRONTEND_URL",
+        getattr(settings, "SITE_URL", ""),
+    ).rstrip("/")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
@@ -123,11 +136,8 @@ def send_renewal_reminder(self, subscription_id: str) -> None:
 
     Args:
         subscription_id: UUID string of the Subscription record.
-
-    Stub implementation — logs instead of sending email.
-    Replace with real email logic (SendGrid / Mailgun / SES) when ready.
     """
-    from subscriptions.models import Subscription
+    from subscriptions.models import Subscription, SubscriptionStatus
 
     try:
         subscription = Subscription.objects.select_related("reader", "plan").get(
@@ -140,28 +150,60 @@ def send_renewal_reminder(self, subscription_id: str) -> None:
         )
         return
 
+    if (
+        subscription.status != SubscriptionStatus.ACTIVE
+        or subscription.cancel_at_period_end
+    ):
+        logger.info(
+            "[send_renewal_reminder] Subscription %s no longer eligible — skipping.",
+            subscription_id,
+        )
+        return
+
     days_left = (subscription.current_period_end - date.today()).days
     plan_name = subscription.plan.name if subscription.plan else "Unknown"
-    price_usd = subscription.plan.price_usd if subscription.plan else "0.00"
+    price_usd = subscription.plan.price_usd if subscription.plan else 0
+    portal_url = _subscription_portal_url()
+
+    message_lines = [
+        f"Your Granite Post {plan_name} subscription renews in {days_left} day(s).",
+        "",
+        f"Renewal date: {subscription.current_period_end}",
+        f"Amount: ${price_usd} USD",
+    ]
+    if portal_url:
+        message_lines.extend(
+            [
+                "",
+                "You can review your subscription here:",
+                portal_url,
+            ]
+        )
+
+    try:
+        send_mail(
+            subject=f"Your Granite Post subscription renews in {days_left} days",
+            message="\n".join(message_lines),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[subscription.reader.email],
+            fail_silently=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[send_renewal_reminder] Failed: subscription=%s email=%s error=%s",
+            subscription_id,
+            _mask_email(subscription.reader.email),
+            exc,
+        )
+        raise self.retry(exc=exc)
 
     logger.info(
-        "[STUB] Renewal reminder → %s  plan=%s  days_left=%d  amount_usd=$%.2f  "
-        "period_end=%s",
-        subscription.reader.email,
+        "[send_renewal_reminder] Sent: subscription=%s email=%s plan=%s days_left=%d",
+        subscription_id,
+        _mask_email(subscription.reader.email),
         plan_name,
         days_left,
-        float(price_usd),
-        subscription.current_period_end,
     )
-
-    # TODO: Replace stub with actual email delivery:
-    # send_mail(
-    #     subject=f"Your Granite Post subscription renews in {days_left} days",
-    #     message=f"Your {plan_name} plan (${price_usd} USD) renews on "
-    #             f"{subscription.current_period_end}.",
-    #     from_email="noreply@thegranite.co.zw",
-    #     recipient_list=[subscription.reader.email],
-    # )
 
 
 @shared_task(bind=True, max_retries=5, default_retry_delay=30, ignore_result=True)
