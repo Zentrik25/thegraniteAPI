@@ -26,6 +26,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsPagination
+from users.permissions import IsAuthorOrAbove
 
 from .models import Article, Category, Tag, TOP_STORY_MAX, TOP_STORY_MIN
 from .serializers import (
@@ -44,6 +45,14 @@ from .serializers import (
 
 class IsAuthorOrStaff(permissions.BasePermission):
     """Authors may edit their own articles; editors and above may edit any article."""
+
+    def has_permission(self, request, view):
+        # Safe methods are always permitted (detail GET is public).
+        # Write methods require at minimum an authenticated user; the
+        # object-level check below enforces the author/editor distinction.
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
@@ -83,7 +92,10 @@ class ArticleListCreateView(generics.ListCreateAPIView):
         return ArticleWriteSerializer if self.request.method == "POST" else ArticleListSerializer
 
     def get_permissions(self):
-        return [permissions.IsAdminUser()] if self.request.method == "POST" else [permissions.AllowAny()]
+        # IsAuthorOrAbove uses the project role model (role != CONTRIBUTOR),
+        # not the raw is_staff flag.  Authors (is_staff=False per signals)
+        # must be able to create draft articles.
+        return [IsAuthorOrAbove()] if self.request.method == "POST" else [permissions.AllowAny()]
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
@@ -200,9 +212,17 @@ class CategoryDetailView(APIView):
             .with_related()
             .order_by("-published_at")
         )
+        paginator = StandardResultsPagination()
+        page = paginator.paginate_queryset(articles, request, view=self)
         return Response({
-            "category": CategorySerializer(category).data,
-            "articles": ArticleListSerializer(articles, many=True, context={"request": request}).data,
+            "category":     CategorySerializer(category).data,
+            "count":        paginator.page.paginator.count,
+            "total_pages":  paginator.page.paginator.num_pages,
+            "current_page": paginator.page.number,
+            "page_size":    paginator.get_page_size(request),
+            "next":         paginator.get_next_link(),
+            "previous":     paginator.get_previous_link(),
+            "articles":     ArticleListSerializer(page, many=True, context={"request": request}).data,
         })
 
 
@@ -227,7 +247,15 @@ class TagDetailView(APIView):
             .with_related()
             .order_by("-published_at")
         )
+        paginator = StandardResultsPagination()
+        page = paginator.paginate_queryset(articles, request, view=self)
         return Response({
-            "tag":      TagSerializer(tag).data,
-            "articles": ArticleListSerializer(articles, many=True, context={"request": request}).data,
+            "tag":          TagSerializer(tag).data,
+            "count":        paginator.page.paginator.count,
+            "total_pages":  paginator.page.paginator.num_pages,
+            "current_page": paginator.page.number,
+            "page_size":    paginator.get_page_size(request),
+            "next":         paginator.get_next_link(),
+            "previous":     paginator.get_previous_link(),
+            "articles":     ArticleListSerializer(page, many=True, context={"request": request}).data,
         })

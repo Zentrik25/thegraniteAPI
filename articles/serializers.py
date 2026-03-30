@@ -65,6 +65,7 @@ class ArticleListSerializer(serializers.ModelSerializer):
             "category",
             "tags",
             "is_breaking",
+            "is_premium",
             "top_story_rank",
             "is_top_story",
             "is_featured",
@@ -114,12 +115,12 @@ class SectionHeroSerializer(ArticleListSerializer):
 
     Intentionally extends ArticleListSerializer (no ``body`` field) so premium
     and free article bodies are never exposed through the public section endpoint.
-    Adds ``is_premium`` so the frontend can render a paywall badge and teaser CTA
-    without receiving gated content.
+    ``is_premium`` is inherited from ArticleListSerializer so the frontend can
+    render a paywall badge and teaser CTA without receiving gated content.
     """
 
     class Meta(ArticleListSerializer.Meta):
-        fields = ArticleListSerializer.Meta.fields + ("is_premium",)
+        pass
 
 
 # ---------------------------------------------------------------------------

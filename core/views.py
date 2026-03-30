@@ -44,6 +44,14 @@ class HealthCheckView(APIView):
             healthy = False
             logger.error("Health check: cache unreachable — %s", exc)
 
+        # Celery broker config — informational only (does not affect healthy/degraded).
+        # Worker liveness is not checked here; use `celery inspect ping` for that.
+        # If cache is "ok" above, the Redis broker is also reachable.
+        broker_url = getattr(settings, "CELERY_BROKER_URL", "")
+        checks["celery_broker"] = (
+            "redis" if broker_url.startswith("redis") else "memory (no worker)"
+        )
+
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
         return Response(

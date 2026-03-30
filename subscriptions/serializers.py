@@ -197,16 +197,20 @@ class PaynowCallbackSerializer(serializers.Serializer):
     we act on are declared here; extras are silently ignored.
     """
 
-    reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    reference       = serializers.CharField(max_length=100, required=False, allow_blank=True)
     paynowreference = serializers.CharField(max_length=100, required=False, allow_blank=True)
-    status    = serializers.CharField(max_length=50)
-    pollurl   = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    amount    = serializers.DecimalField(
+    status          = serializers.CharField(max_length=50)
+    pollurl         = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    amount          = serializers.DecimalField(
         max_digits=10,
         decimal_places=2,
         required=False,
         default=Decimal("0.00"),
     )
+    # hash is verified in PaynowCallbackView before this serializer runs;
+    # declared here so it appears in the OpenAPI schema and is stripped from
+    # validated_data (not passed downstream).
+    hash            = serializers.CharField(max_length=128, required=True)
 
     def validate(self, attrs: dict) -> dict:
         """Reject malformed callback bodies before they reach task dispatch."""

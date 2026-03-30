@@ -257,6 +257,13 @@ class ArticleAPITests(APITestCase):
 
     # -- List ---------------------------------------------------------------
 
+    def test_list_response_includes_is_premium(self):
+        r = self.client.get("/api/articles/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        first = r.data["results"][0]
+        self.assertIn("is_premium", first)
+        self.assertIsInstance(first["is_premium"], bool)
+
     def test_list_published_only_for_anonymous(self):
         make_article(self.staff, title="Draft")
         r = self.client.get("/api/articles/")
@@ -284,10 +291,10 @@ class ArticleAPITests(APITestCase):
 
     # -- Create -------------------------------------------------------------
 
-    def test_create_forbidden_for_non_staff(self):
-        self.client.force_authenticate(self.editor)
+    def test_create_requires_authentication(self):
+        """Unauthenticated POST to /api/articles/ must be rejected."""
         r = self.client.post("/api/articles/", {"title": "New", "body": "..."})
-        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
     def test_staff_can_create_draft(self):
         self.client.force_authenticate(self.staff)
@@ -347,6 +354,103 @@ class ArticleAPITests(APITestCase):
         r = self.client.get("/api/articles/featured/")
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertTrue(len(r.data) > 0)
+
+
+# ---------------------------------------------------------------------------
+# Category / Tag detail — pagination bounding
+# ---------------------------------------------------------------------------
+
+class CategoryDetailPaginationTests(APITestCase):
+    """
+    GET /api/categories/<slug>/ must return bounded article lists.
+
+    The response keeps its envelope shape:
+      {"category": {...}, "count": N, "total_pages": N, ..., "articles": [...page...]}
+    The "articles" key is preserved for backward compatibility; pagination
+    metadata keys are additive.
+    """
+
+    def setUp(self):
+        self.editor = make_user("cat_editor", role="editor")
+        self.cat    = Category.objects.create(name="Pagination Test", slug="pagination-test")
+
+    def _url(self):
+        return f"/api/categories/{self.cat.slug}/"
+
+    def test_response_contains_category_metadata(self):
+        r = self.client.get(self._url())
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("category", r.data)
+        self.assertEqual(r.data["category"]["slug"], self.cat.slug)
+
+    def test_response_contains_articles_key(self):
+        """The 'articles' key must still be present (backward compat)."""
+        r = self.client.get(self._url())
+        self.assertIn("articles", r.data)
+        self.assertIsInstance(r.data["articles"], list)
+
+    def test_response_contains_pagination_metadata(self):
+        """Pagination envelope keys are added alongside existing keys."""
+        r = self.client.get(self._url())
+        for key in ("count", "total_pages", "current_page", "page_size", "next", "previous"):
+            self.assertIn(key, r.data, msg=f"Missing pagination key: {key}")
+
+    def test_articles_bounded_to_page_size(self):
+        """More than page_size articles are not all returned on page 1."""
+        for i in range(25):
+            make_published(
+                self.editor,
+                title=f"Cat Article {i}",
+                category=self.cat,
+            )
+        r = self.client.get(self._url())
+        self.assertEqual(r.data["count"], 25)
+        self.assertLessEqual(len(r.data["articles"]), 20)  # page_size=20
+
+    def test_page_two_reachable(self):
+        """?page=2 returns the next slice when count > page_size."""
+        for i in range(25):
+            make_published(self.editor, title=f"P2 Cat {i}", category=self.cat)
+        r = self.client.get(self._url() + "?page=2")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["current_page"], 2)
+        self.assertGreater(len(r.data["articles"]), 0)
+
+    def test_empty_category_returns_zero_count(self):
+        r = self.client.get(self._url())
+        self.assertEqual(r.data["count"], 0)
+        self.assertEqual(r.data["articles"], [])
+
+
+class TagDetailPaginationTests(APITestCase):
+    """GET /api/tags/<slug>/ — same bounding contract as CategoryDetailView."""
+
+    def setUp(self):
+        self.editor = make_user("tag_editor", role="editor")
+        self.tag    = Tag.objects.create(name="pagtest", slug="pagtest")
+
+    def _url(self):
+        return f"/api/tags/{self.tag.slug}/"
+
+    def test_response_shape_preserved(self):
+        r = self.client.get(self._url())
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("tag", r.data)
+        self.assertIn("articles", r.data)
+
+    def test_response_contains_pagination_metadata(self):
+        r = self.client.get(self._url())
+        for key in ("count", "total_pages", "current_page", "page_size", "next", "previous"):
+            self.assertIn(key, r.data, msg=f"Missing pagination key: {key}")
+
+    def test_articles_bounded_to_page_size(self):
+        cat = Category.objects.create(name="TagCat", slug="tagcat")
+        for i in range(25):
+            art = make_published(self.editor, title=f"Tag Art {i}", category=cat)
+            art.tags.add(self.tag)
+        r = self.client.get(self._url())
+        self.assertEqual(r.data["count"], 25)
+        self.assertLessEqual(len(r.data["articles"]), 20)
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +541,64 @@ class ArticlePermissionConsistencyTests(APITestCase):
             format="json",
         )
         self.assertEqual(r.status_code, status.HTTP_200_OK)
+
+    # ------------------------------------------------------------------
+    # Create (POST) — role model gate replaces raw is_staff check
+    # ------------------------------------------------------------------
+
+    def test_author_can_create_article(self):
+        """
+        Authors have role != CONTRIBUTOR so IsAuthorOrAbove passes.
+        Under the old IsAdminUser guard they were blocked (is_staff=False);
+        this test confirms the fix.
+        """
+        self.client.force_authenticate(self.author)
+        r = self.client.post(
+            "/api/articles/",
+            {"title": "Author Draft", "body": "Body text.", "status": "draft"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_contributor_cannot_create_article(self):
+        """Contributors (role == CONTRIBUTOR) are blocked by IsAuthorOrAbove."""
+        contributor = make_user("contrib_user", role="contributor")
+        self.client.force_authenticate(contributor)
+        r = self.client.post(
+            "/api/articles/",
+            {"title": "Contrib Draft", "body": "Body text.", "status": "draft"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_create_article(self):
+        """Unauthenticated requests are rejected before the role check."""
+        r = self.client.post(
+            "/api/articles/",
+            {"title": "Anon Draft", "body": "Body text.", "status": "draft"},
+            format="json",
+        )
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    # ------------------------------------------------------------------
+    # Unauthenticated write — must return 401/403, not 500
+    # ------------------------------------------------------------------
+
+    def test_unauthenticated_patch_is_rejected_not_500(self):
+        """
+        Without the has_permission guard on IsAuthorOrStaff, an unauthenticated
+        PATCH would reach has_object_permission and call can_edit_any_article on
+        AnonymousUser, raising AttributeError → 500.  Confirm it now returns a
+        proper 401 or 403.
+        """
+        r = self.client.patch(
+            f"/api/articles/{self.published.slug}/",
+            {"title": "Hijacked"},
+            format="json",
+        )
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_unauthenticated_delete_is_rejected_not_500(self):
+        """Same guard applies to DELETE (archive) — must not reach object level."""
+        r = self.client.delete(f"/api/articles/{self.published.slug}/")
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))

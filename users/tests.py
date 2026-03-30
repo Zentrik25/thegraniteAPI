@@ -234,6 +234,39 @@ class UserAPITests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertEqual(r.data["user"]["slug"], self.author.slug)
         self.assertIn("articles", r.data)
+        # Pagination metadata must be present (additive — does not change
+        # the "articles" key that existing consumers read).
+        for key in ("count", "total_pages", "current_page", "page_size", "next", "previous"):
+            self.assertIn(key, r.data, msg=f"Missing pagination key: {key}")
+
+    def test_public_user_detail_articles_bounded(self):
+        """Author with >page_size articles must not return all of them on page 1."""
+        for i in range(25):
+            make_article(
+                self.author,
+                art_status=PublishStatus.PUBLISHED,
+                category=self.cat,
+                title=f"Article {i}",
+            )
+        r = self.client.get(f"/api/v1/users/{self.author.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        # setUp added 1 article, loop adds 25 → total 26
+        self.assertEqual(r.data["count"], 26)
+        self.assertLessEqual(len(r.data["articles"]), 20)
+
+    def test_public_user_detail_page_two(self):
+        """?page=2 returns the next slice for a prolific author."""
+        for i in range(25):
+            make_article(
+                self.author,
+                art_status=PublishStatus.PUBLISHED,
+                category=self.cat,
+                title=f"Page2 Art {i}",
+            )
+        r = self.client.get(f"/api/v1/users/{self.author.slug}/?page=2")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["current_page"], 2)
+        self.assertGreater(len(r.data["articles"]), 0)
 
     def test_public_user_detail_404(self):
         r = self.client.get("/api/v1/users/does-not-exist/")

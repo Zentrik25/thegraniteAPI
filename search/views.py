@@ -216,9 +216,19 @@ class ArticleSearchView(APIView):
             article_data = ArticleListSerializer(
                 article, context={"request": request}
             ).data
+            # SearchHeadline is derived directly from the body field.
+            # For premium articles the body is gated content — returning
+            # a body-derived snippet would leak it regardless of the
+            # serializer's field exclusions.  Use the article's public
+            # excerpt instead.  Free articles get the normal body snippet.
+            headline = (
+                article.excerpt or ""
+                if article.is_premium
+                else getattr(article, "headline", "")
+            )
             results.append({
                 "rank":     round(float(article.rank), 4),
-                "headline": getattr(article, "headline", ""),
+                "headline": headline,
                 "article":  article_data,
             })
 

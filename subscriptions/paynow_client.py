@@ -15,12 +15,56 @@ Environment variables required (set in settings.py):
   PAYNOW_RESULT_URL      — Paynow posts payment status to this URL (webhook)
 """
 
+import hashlib
+import hmac
 import logging
 from typing import Any
 
 from django.conf import settings
 
 logger = logging.getLogger("subscriptions.paynow_client")
+
+# ---------------------------------------------------------------------------
+# Callback hash verification
+# ---------------------------------------------------------------------------
+
+# Paynow's result-URL POST always includes these fields in this order,
+# followed by the merchant integration key (lowercased).  The hash is
+# SHA-512 of their concatenated string values (hash field excluded).
+_CALLBACK_HASH_FIELDS = ("reference", "paynowreference", "amount", "status", "pollurl")
+
+
+def verify_paynow_callback_hash(post_data: dict, integration_key: str) -> bool:
+    """
+    Verify the SHA-512 hash that Paynow includes in every result-URL POST.
+
+    Algorithm (mirrors Paynow SDK's private __hash / __verify_hash methods):
+      1. Concatenate the string value of each callback field in the documented
+         order, skipping the ``hash`` field itself.
+      2. Append the integration key in lowercase.
+      3. SHA-512 the UTF-8-encoded result, uppercase hex.
+      4. Constant-time compare with the provided hash value.
+
+    Returns False (rather than raising) on any failure so callers always get
+    a boolean they can act on immediately.
+    """
+    if not integration_key:
+        logger.warning(
+            "[Paynow] verify_callback_hash: PAYNOW_INTEGRATION_KEY is not configured"
+        )
+        return False
+
+    provided = str(post_data.get("hash", "")).strip()
+    if not provided:
+        return False
+
+    parts = "".join(
+        str(post_data.get(field, "")) for field in _CALLBACK_HASH_FIELDS
+    )
+    parts += integration_key.lower()
+
+    expected = hashlib.sha512(parts.encode("utf-8")).hexdigest().upper()
+    return hmac.compare_digest(provided.upper(), expected)
 
 
 class PaynowClient:

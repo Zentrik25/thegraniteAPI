@@ -6,6 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.pagination import StandardResultsPagination
+
 from .models import StaffUser
 from .permissions import CanManageStaff, IsEditorOrAbove, IsStaffUser
 from .serializers import (
@@ -44,9 +46,17 @@ class UserDetailView(APIView):
             .order_by("-published_at")
         )
 
+        paginator = StandardResultsPagination()
+        page = paginator.paginate_queryset(articles, request, view=self)
         return Response({
-            "user":     UserPublicSerializer(user, context={"request": request}).data,
-            "articles": ArticleListSerializer(articles, many=True, context={"request": request}).data,
+            "user":         UserPublicSerializer(user, context={"request": request}).data,
+            "count":        paginator.page.paginator.count,
+            "total_pages":  paginator.page.paginator.num_pages,
+            "current_page": paginator.page.number,
+            "page_size":    paginator.get_page_size(request),
+            "next":         paginator.get_next_link(),
+            "previous":     paginator.get_previous_link(),
+            "articles":     ArticleListSerializer(page, many=True, context={"request": request}).data,
         })
 
 

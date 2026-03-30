@@ -55,7 +55,7 @@ from .models import (
     SubscriptionPlan,
     SubscriptionStatus,
 )
-from .paynow_client import PaynowClient
+from .paynow_client import PaynowClient, verify_paynow_callback_hash
 from .serializers import (
     CancelSubscriptionSerializer,
     PaymentSerializer,
@@ -405,6 +405,18 @@ class PaynowCallbackView(APIView):
     @extend_schema(request=PaynowCallbackSerializer, responses={200: None})
     def post(self, request) -> Response:
         """Accept Paynow payment callback and trigger async processing."""
+        # ------------------------------------------------------------------
+        # Hash verification — must happen before the serializer so we use
+        # the raw string values from request.data (amount is still "2.00",
+        # not a Decimal).  Reject immediately on any mismatch.
+        # ------------------------------------------------------------------
+        if not verify_paynow_callback_hash(request.data, settings.PAYNOW_INTEGRATION_KEY):
+            logger.warning("[PaynowCallback] Hash verification failed; callback rejected.")
+            return Response(
+                {"detail": "Hash verification failed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = PaynowCallbackSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning("[PaynowCallback] Invalid payload rejected.")

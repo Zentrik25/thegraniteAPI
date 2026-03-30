@@ -65,12 +65,14 @@ def check_expired_subscriptions(self) -> None:
 
     expired_qs = Subscription.objects.filter(
         status=SubscriptionStatus.ACTIVE,
+        cancel_at_period_end=False,
         current_period_end__lt=today,
     )
     expired_reader_ids = list(expired_qs.values_list("reader_id", flat=True))
 
-    # Expire any remaining overdue active subscriptions (those not flagged for
-    # graceful cancellation above).
+    # Expire overdue active subscriptions that were NOT flagged for graceful
+    # cancellation.  The cancel_at_period_end=False guard makes this correct
+    # regardless of execution order — the filter itself enforces the invariant.
     expired_count = expired_qs.update(status=SubscriptionStatus.EXPIRED)
     if expired_count:
         logger.info(

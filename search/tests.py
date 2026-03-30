@@ -237,6 +237,187 @@ class ArticleSearchAPITests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
+# Premium body leak prevention
+# ---------------------------------------------------------------------------
+
+@skipUnless(connection.vendor == "postgresql", "PostgreSQL required for full-text search")
+class PremiumSearchLeakTests(APITestCase):
+    """
+    Guard that premium article body text never reaches public search
+    responses via the SearchHeadline ORM annotation.
+
+    SearchHeadline("body", …) generates a snippet directly from the body
+    column.  For premium articles that body is gated content; this suite
+    verifies the view substitutes the public excerpt instead.
+    """
+
+    # Distinctive strings that must/must-not appear in responses.
+    _PREMIUM_BODY_MARKER = "EXCLUSIVEPREMIUMCONTENT"
+    _FREE_BODY_MARKER    = "FREEBODYCONTENT"
+
+    def setUp(self):
+        self.user = make_user("leak_reporter")
+        self.cat  = Category.objects.create(name="Leak Tests")
+
+        # Free article — body snippet should reach the response normally.
+        self.free_article = make_article(
+            self.user,
+            title    = "Free Article About Harare Traffic",
+            body     = f"{self._FREE_BODY_MARKER} harare traffic congestion details.",
+            excerpt  = "Free public excerpt about Harare traffic.",
+            category = self.cat,
+        )
+
+        # Premium article — body snippet must NEVER reach the response.
+        self.premium_article = make_article(
+            self.user,
+            title      = "Premium Analysis of Economic Policy",
+            body       = f"{self._PREMIUM_BODY_MARKER} exclusive subscriber analysis.",
+            excerpt    = "Premium public excerpt: economic policy overview.",
+            category   = self.cat,
+            is_premium = True,
+        )
+
+    # -- Core leak prevention -----------------------------------------------
+
+    def test_premium_body_marker_absent_from_all_headlines(self):
+        """
+        The distinctive premium body string must not appear in any
+        headline field across any search result page.
+        """
+        r = self.client.get(
+            f"/api/v1/search/?q={self._PREMIUM_BODY_MARKER.lower()}"
+        )
+        self.assertEqual(r.status_code, 200)
+        for result in r.data["results"]:
+            self.assertNotIn(
+                self._PREMIUM_BODY_MARKER,
+                result["headline"],
+                msg="Premium body text leaked via search headline.",
+            )
+
+    def test_premium_article_headline_equals_excerpt(self):
+        """
+        When a premium article appears in results, its headline must be
+        the article's public excerpt — not a body-derived snippet.
+        """
+        r = self.client.get("/api/v1/search/?q=economic+policy")
+        self.assertEqual(r.status_code, 200)
+        premium_results = [
+            res for res in r.data["results"]
+            if res["article"]["slug"] == self.premium_article.slug
+        ]
+        self.assertTrue(
+            premium_results,
+            "Premium article did not appear in search results for a query "
+            "matching its title — cannot verify headline safety.",
+        )
+        self.assertEqual(
+            premium_results[0]["headline"],
+            self.premium_article.excerpt,
+        )
+
+    def test_premium_body_text_not_in_article_dict(self):
+        """
+        ArticleListSerializer already excludes body; double-check that
+        the article sub-dict also contains no body key.
+        """
+        r = self.client.get("/api/v1/search/?q=economic+policy")
+        for result in r.data["results"]:
+            self.assertNotIn("body", result["article"])
+
+    # -- Discoverability preserved ------------------------------------------
+
+    def test_premium_article_appears_in_results_for_title_query(self):
+        """Premium articles must still be findable by title."""
+        r = self.client.get("/api/v1/search/?q=economic+policy")
+        slugs = [res["article"]["slug"] for res in r.data["results"]]
+        self.assertIn(self.premium_article.slug, slugs)
+
+    def test_premium_article_appears_in_results_for_body_query(self):
+        """
+        Premium articles must appear even when the query matches only the
+        body — the article is indexed, the body text just doesn't leak.
+        """
+        r = self.client.get(
+            f"/api/v1/search/?q={self._PREMIUM_BODY_MARKER.lower()}"
+        )
+        self.assertEqual(r.status_code, 200)
+        slugs = [res["article"]["slug"] for res in r.data["results"]]
+        self.assertIn(
+            self.premium_article.slug,
+            slugs,
+            "Premium article disappeared from results — it should be "
+            "discoverable even though the body snippet is suppressed.",
+        )
+
+    # -- Free article behaviour unaffected ----------------------------------
+
+    def test_free_article_headline_is_body_derived(self):
+        """Free articles still get body-derived headlines with <mark> tags."""
+        r = self.client.get(
+            f"/api/v1/search/?q={self._FREE_BODY_MARKER.lower()}"
+        )
+        self.assertEqual(r.status_code, 200)
+        free_results = [
+            res for res in r.data["results"]
+            if res["article"]["slug"] == self.free_article.slug
+        ]
+        self.assertTrue(
+            free_results,
+            "Free article not found — cannot verify body snippet behaviour.",
+        )
+        headline = free_results[0]["headline"]
+        self.assertIn(
+            "<mark>",
+            headline,
+            "Free article headline should contain <mark> tags from SearchHeadline.",
+        )
+
+    def test_free_article_body_marker_present_in_headline(self):
+        """The free article's body content reaches the headline as expected."""
+        r = self.client.get(
+            f"/api/v1/search/?q={self._FREE_BODY_MARKER.lower()}"
+        )
+        free_results = [
+            res for res in r.data["results"]
+            if res["article"]["slug"] == self.free_article.slug
+        ]
+        if free_results:
+            self.assertIn(self._FREE_BODY_MARKER, free_results[0]["headline"])
+
+    # -- Response shape stability -------------------------------------------
+
+    def test_headline_key_always_present_for_premium(self):
+        """headline must be present in the result dict even for premium articles."""
+        r = self.client.get("/api/v1/search/?q=economic+policy")
+        premium_results = [
+            res for res in r.data["results"]
+            if res["article"]["slug"] == self.premium_article.slug
+        ]
+        if premium_results:
+            self.assertIn("headline", premium_results[0])
+
+    def test_premium_headline_is_string_not_none(self):
+        """headline for a premium article with no excerpt must be empty string."""
+        no_excerpt_article = make_article(
+            self.user,
+            title      = "Premium No Excerpt Article",
+            body       = f"{self._PREMIUM_BODY_MARKER} no excerpt set.",
+            excerpt    = "",
+            category   = self.cat,
+            is_premium = True,
+        )
+        r = self.client.get(
+            f"/api/v1/search/?q={self._PREMIUM_BODY_MARKER.lower()}"
+        )
+        for result in r.data["results"]:
+            # headline must never be None — empty string is the safe fallback.
+            self.assertIsNotNone(result["headline"])
+            self.assertIsInstance(result["headline"], str)
+
+
+# ---------------------------------------------------------------------------
 # Management command
 # ---------------------------------------------------------------------------
 

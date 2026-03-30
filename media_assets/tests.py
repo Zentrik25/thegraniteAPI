@@ -270,9 +270,19 @@ class MediaDeleteAPITests(APITestCase):
         self.assertEqual(r.status_code, 200)
 
     def test_other_author_cannot_delete(self):
+        """Non-owner gets 404, not 403 — asset existence is not leaked."""
         self.client.force_authenticate(self.other)
         r = self.client.delete(f"/api/v1/media/{self.asset_id}/")
-        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.status_code, 404)
+
+    def test_other_author_delete_returns_404_not_403(self):
+        """
+        Explicitly guard the non-leak guarantee.  A 403 would confirm the
+        asset ID is valid; 404 is indistinguishable from a missing record.
+        """
+        self.client.force_authenticate(self.other)
+        r = self.client.delete(f"/api/v1/media/{self.asset_id}/")
+        self.assertNotEqual(r.status_code, 403)
 
     def test_editor_can_delete_any_asset(self):
         self.client.force_authenticate(self.editor)

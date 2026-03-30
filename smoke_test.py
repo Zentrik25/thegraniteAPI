@@ -33,6 +33,8 @@ REQUIRED_IMPORTS = {
     # Cache / broker
     "redis":                     "redis",
     "celery":                    "celery",
+    # HTTP client (core.cloudflare_purge)
+    "requests":                  "requests",
     # Image processing (media_assets validators)
     "Pillow":                    "PIL",
     # Web push notifications (notifications.tasks)

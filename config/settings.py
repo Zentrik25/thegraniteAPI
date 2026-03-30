@@ -32,6 +32,33 @@ def _validate_security_settings(*, debug: bool, testing: bool, secret_key: str) 
         )
 
 
+def _validate_celery_settings(
+    *,
+    production: bool,
+    broker_url: str,
+) -> None:
+    """
+    Fail fast in production when the Celery broker has fallen back to the
+    in-process memory transport.
+
+    The memory:// broker is ephemeral and process-local: tasks enqueued by the
+    web worker are never consumed by a Celery worker and are silently lost on
+    process restart.  Affected tasks include payment callbacks, subscription
+    expiry checks, and transactional email delivery.
+
+    Production MUST supply REDIS_URL so the broker resolves to redis://.
+    """
+    if not production:
+        return
+    if broker_url.startswith("memory://"):
+        raise ImproperlyConfigured(
+            "CELERY_BROKER_URL resolves to memory:// in production. "
+            "Set the REDIS_URL environment variable to a real Redis DSN. "
+            "Without it, tasks (payment callbacks, expiry checks, email "
+            "delivery) will be silently dropped."
+        )
+
+
 def _validate_email_settings(
     *,
     production: bool,
@@ -260,7 +287,10 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_flag(
     "SECURE_HSTS_INCLUDE_SUBDOMAINS",
     default=bool(_PRODUCTION and SECURE_HSTS_SECONDS),
 )
-SECURE_HSTS_PRELOAD = _env_flag("SECURE_HSTS_PRELOAD", default=False)
+SECURE_HSTS_PRELOAD = _env_flag(
+    "SECURE_HSTS_PRELOAD",
+    default=bool(_PRODUCTION and SECURE_HSTS_SECONDS),
+)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 X_FRAME_OPTIONS = "DENY"
@@ -398,6 +428,7 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=8, minute=0),
     },
 }
+_validate_celery_settings(production=_PRODUCTION, broker_url=CELERY_BROKER_URL)
 
 # ---------------------------------------------------------------------------
 # Cloudflare CDN

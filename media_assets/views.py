@@ -3,7 +3,6 @@ import os
 
 from django.shortcuts import get_object_or_404
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -140,17 +139,13 @@ class MediaDetailView(APIView):
         return Response(MediaAssetSerializer(asset).data)
 
     def delete(self, request, pk):
-        asset = get_object_or_404(MediaAsset, pk=pk)
-
-        # Only uploader or editor+ can delete.
-        if (
-            asset.uploaded_by != request.user
-            and not request.user.can_edit_any_article
-        ):
-            raise PermissionDenied(
-                "You can only delete your own uploads. "
-                "Editors and above can delete any asset."
-            )
+        # Apply the same ownership filter used by GET so that a non-owner
+        # author receives 404 rather than 403.  404 is intentional: it avoids
+        # leaking asset existence to other authors via a distinguishable 403.
+        qs = MediaAsset.objects.all()
+        if not request.user.can_edit_any_article:
+            qs = qs.filter(uploaded_by=request.user)
+        asset = get_object_or_404(qs, pk=pk)
 
         filename = asset.original_filename
         pk_val   = asset.pk

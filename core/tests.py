@@ -400,12 +400,35 @@ class HealthCheckTests(APITestCase):
         self.assertIn("checks",           r.data)
         self.assertIn("database",         r.data["checks"])
         self.assertIn("cache",            r.data["checks"])
+        self.assertIn("celery_broker",    r.data["checks"])
         self.assertIn("response_time_ms", r.data)
 
     def test_checks_ok_in_test_env(self):
         r = self.client.get("/health/")
         self.assertEqual(r.data["checks"]["database"], "ok")
         self.assertEqual(r.data["checks"]["cache"],    "ok")
+
+    def test_celery_broker_key_present_in_checks(self):
+        """celery_broker is always present — informational, never degrades status."""
+        r = self.client.get("/health/")
+        self.assertIn("celery_broker", r.data["checks"])
+
+    def test_celery_broker_reports_memory_in_test_env(self):
+        """In tests the broker is memory://, key should say so."""
+        r = self.client.get("/health/")
+        self.assertEqual(r.data["checks"]["celery_broker"], "memory (no worker)")
+
+    @override_settings(CELERY_BROKER_URL="redis://localhost:6379/0")
+    def test_celery_broker_reports_redis_when_configured(self):
+        """If broker URL starts with redis, key reports 'redis'."""
+        r = self.client.get("/health/")
+        self.assertEqual(r.data["checks"]["celery_broker"], "redis")
+
+    def test_celery_broker_field_does_not_affect_status(self):
+        """memory:// broker must not degrade the healthy status — it is informational."""
+        r = self.client.get("/health/")
+        # Even with memory:// broker the overall status must be healthy in test env
+        self.assertEqual(r.data["status"], "healthy")
 
     @patch("django.db.backends.base.base.BaseDatabaseWrapper.ensure_connection")
     def test_db_failure_returns_503(self, mock_conn):
@@ -455,3 +478,107 @@ class JWTLoginTests(APITestCase):
         })
         self.assertEqual(r.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(r.data["code"], "authentication_failed")
+
+
+# ---------------------------------------------------------------------------
+# Celery broker validation
+# ---------------------------------------------------------------------------
+
+class CeleryBrokerValidationTests(TestCase):
+    """
+    Guard that _validate_celery_settings fails fast in production when the
+    broker falls back to the in-process memory transport, and is relaxed
+    (non-raising) in non-production contexts.
+    """
+
+    def test_production_memory_broker_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            project_settings_module._validate_celery_settings(
+                production=True,
+                broker_url="memory://",
+            )
+
+    def test_production_redis_broker_passes(self):
+        # Should not raise for a real Redis DSN.
+        project_settings_module._validate_celery_settings(
+            production=True,
+            broker_url="redis://redis.example.com:6379/0",
+        )
+
+    def test_production_rediss_broker_passes(self):
+        # TLS Redis URLs (rediss://) must also pass.
+        project_settings_module._validate_celery_settings(
+            production=True,
+            broker_url="rediss://redis.example.com:6380/0",
+        )
+
+    def test_non_production_memory_broker_passes(self):
+        # Dev/test with memory:// is allowed — validation is production-only.
+        project_settings_module._validate_celery_settings(
+            production=False,
+            broker_url="memory://",
+        )
+
+    def test_current_test_run_passes_celery_check(self):
+        # _PRODUCTION is False during tests so the validator never fires,
+        # and the test broker (memory://) is valid.
+        self.assertFalse(project_settings_module._PRODUCTION)
+
+    def test_error_message_mentions_redis_url(self):
+        """Operator guidance must name the env var that fixes the problem."""
+        try:
+            project_settings_module._validate_celery_settings(
+                production=True,
+                broker_url="memory://",
+            )
+        except ImproperlyConfigured as exc:
+            self.assertIn("REDIS_URL", str(exc))
+        else:
+            self.fail("Expected ImproperlyConfigured was not raised.")
+
+
+class CeleryStartupWarningTests(TestCase):
+    """
+    Guard that _warn_if_memory_broker logs at WARNING level when the broker
+    is memory:// and eager mode is off, and stays silent otherwise.
+    """
+
+    def _get_config(self):
+        import importlib
+        from core.apps import CoreConfig
+        return CoreConfig("core", importlib.import_module("core"))
+
+    def test_memory_broker_without_eager_logs_warning(self):
+        cfg = self._get_config()
+        with override_settings(CELERY_TASK_ALWAYS_EAGER=False, CELERY_BROKER_URL="memory://"):
+            with self.assertLogs("core", level="WARNING") as captured:
+                cfg._warn_if_memory_broker()
+        combined = "\n".join(captured.output)
+        self.assertIn("memory://", combined)
+
+    def test_eager_mode_suppresses_warning(self):
+        """With eager mode on tasks are synchronous — no warning needed."""
+        cfg = self._get_config()
+        with override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_BROKER_URL="memory://"):
+            # assertLogs would fail if no message is emitted at WARNING+;
+            # use assertNoLogs (Django 4.1+) or a manual check.
+            import logging
+            with self.assertRaises(AssertionError):
+                with self.assertLogs("core", level="WARNING"):
+                    cfg._warn_if_memory_broker()
+
+    def test_redis_broker_suppresses_warning(self):
+        """Real Redis broker → no warning regardless of eager flag."""
+        cfg = self._get_config()
+        with override_settings(
+            CELERY_TASK_ALWAYS_EAGER=False,
+            CELERY_BROKER_URL="redis://localhost:6379/0",
+        ):
+            with self.assertRaises(AssertionError):
+                with self.assertLogs("core", level="WARNING"):
+                    cfg._warn_if_memory_broker()
+
+    def test_current_test_run_does_not_warn(self):
+        """In the actual test suite eager mode is on — warning must be silent."""
+        from django.conf import settings as s
+        self.assertTrue(s.CELERY_TASK_ALWAYS_EAGER)
