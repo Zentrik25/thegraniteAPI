@@ -315,3 +315,107 @@ class ModerationTests(APITestCase):
             {"action": "delete"},
         )
         self.assertEqual(r.status_code, 400)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — abuse prevention
+# ---------------------------------------------------------------------------
+
+class CommentRateLimitTests(APITestCase):
+    """
+    CommentRateThrottle allows 3 comments per hour per IP.
+    The 4th request from the same IP must receive HTTP 429.
+    """
+
+    def setUp(self):
+        self.user    = make_user("rllimit", role="author")
+        self.article = make_article(self.user)
+        self.url     = f"/api/v1/articles/{self.article.slug}/comments/"
+        caches["throttle"].clear()
+
+    def tearDown(self):
+        caches["throttle"].clear()
+
+    def _post_comment(self, n: int):
+        return self.client.post(self.url, {
+            "author_name":  f"Spammer{n}",
+            "author_email": f"spam{n}@test.com",
+            "body":         f"Comment number {n}.",
+        })
+
+    def test_first_three_comments_succeed(self):
+        for i in range(1, 4):
+            r = self._post_comment(i)
+            self.assertEqual(r.status_code, 201, msg=f"Comment {i} should be 201, got {r.status_code}")
+
+    def test_fourth_comment_returns_429(self):
+        for i in range(1, 4):
+            self._post_comment(i)
+        r = self._post_comment(4)
+        self.assertEqual(r.status_code, 429)
+
+    def test_429_response_includes_retry_after(self):
+        for i in range(1, 5):
+            r = self._post_comment(i)
+        # Last request should be 429; Retry-After header must be present
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Retry-After", r)
+
+
+# ---------------------------------------------------------------------------
+# Bulk moderation
+# ---------------------------------------------------------------------------
+
+class BulkModerationTests(APITestCase):
+    """
+    Approve or reject multiple comments in a single request via the
+    moderation action endpoint called repeatedly, verifying state changes
+    are independent and idempotent.
+    """
+
+    def setUp(self):
+        self.moderator = make_user("bulkmod", role="moderator")
+        self.author    = make_user("bulkauth", role="author")
+        self.article   = make_article(self.author)
+        self.c1 = make_comment(self.article, "Alpha", status=CommentStatus.PENDING)
+        self.c2 = make_comment(self.article, "Beta",  status=CommentStatus.PENDING)
+        self.c3 = make_comment(self.article, "Gamma", status=CommentStatus.PENDING)
+        self.client.force_authenticate(self.moderator)
+
+    def test_approve_multiple_comments_independently(self):
+        for pk in (self.c1.pk, self.c2.pk):
+            r = self.client.patch(
+                f"/api/v1/moderation/comments/{pk}/",
+                {"action": "approve"},
+            )
+            self.assertEqual(r.status_code, 200)
+
+        self.c1.refresh_from_db()
+        self.c2.refresh_from_db()
+        self.c3.refresh_from_db()
+
+        self.assertEqual(self.c1.status, CommentStatus.APPROVED)
+        self.assertEqual(self.c2.status, CommentStatus.APPROVED)
+        self.assertEqual(self.c3.status, CommentStatus.PENDING)
+
+    def test_reject_one_does_not_affect_others(self):
+        self.client.patch(
+            f"/api/v1/moderation/comments/{self.c1.pk}/",
+            {"action": "reject"},
+        )
+        self.c2.refresh_from_db()
+        self.assertEqual(self.c2.status, CommentStatus.PENDING)
+
+    def test_re_approve_already_approved_is_idempotent(self):
+        # Approve twice — second call must still return 200 and leave status APPROVED.
+        self.client.patch(
+            f"/api/v1/moderation/comments/{self.c1.pk}/",
+            {"action": "approve"},
+        )
+        r = self.client.patch(
+            f"/api/v1/moderation/comments/{self.c1.pk}/",
+            {"action": "approve"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.c1.refresh_from_db()
+        self.assertEqual(self.c1.status, CommentStatus.APPROVED)

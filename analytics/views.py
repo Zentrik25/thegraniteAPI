@@ -1,10 +1,10 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +12,7 @@ from articles.models import Article
 from core.cache import get_or_set_cache
 from core.middleware import _get_client_ip
 from core.throttling import BurstRateThrottle
+from users.permissions import IsEditorOrAbove
 
 from .models import ArticleView
 from .serializers import TrendingArticleSerializer, ViewRecordedSerializer
@@ -164,3 +165,74 @@ class TrendingArticlesView(APIView):
 
         data = get_or_set_cache(cache_key, compute, ttl=300)
         return Response(data)
+
+
+def _parse_date(value: str | None, default: date) -> date:
+    """Parse a YYYY-MM-DD string, returning *default* on any error."""
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return default
+
+
+class ArticleViewStatsView(APIView):
+    """
+    GET /api/v1/analytics/articles/<slug>/stats/
+
+    Returns per-day view counts for an article within a date range.
+    Intended for editorial dashboards — Editors and above only.
+
+    Query params:
+      from_date  YYYY-MM-DD  Start of range (default: 30 days ago).
+      to_date    YYYY-MM-DD  End of range   (default: today).
+
+    Response:
+      {
+        "article":     "<slug>",
+        "from_date":   "YYYY-MM-DD",
+        "to_date":     "YYYY-MM-DD",
+        "total_views": <int>,       # all-time view_count from Article
+        "daily": [
+          {"date": "YYYY-MM-DD", "views": <int>},
+          ...                       # only days with ≥1 view are included
+        ]
+      }
+    """
+
+    permission_classes = [IsAuthenticated, IsEditorOrAbove]
+
+    def get(self, request, slug):
+        article = get_object_or_404(Article, slug=slug)
+
+        today        = timezone.now().date()
+        default_from = today - timedelta(days=29)
+
+        from_date = _parse_date(request.query_params.get("from_date"), default_from)
+        to_date   = _parse_date(request.query_params.get("to_date"),   today)
+
+        # Swap silently if caller passes them backwards.
+        if from_date > to_date:
+            from_date, to_date = to_date, from_date
+
+        from django.db.models import Count
+
+        daily_rows = (
+            ArticleView.objects
+            .filter(article=article, viewed_date__range=(from_date, to_date))
+            .values("viewed_date")
+            .annotate(views=Count("id"))
+            .order_by("viewed_date")
+        )
+
+        return Response({
+            "article":     slug,
+            "from_date":   from_date,
+            "to_date":     to_date,
+            "total_views": article.view_count,
+            "daily": [
+                {"date": row["viewed_date"], "views": row["views"]}
+                for row in daily_rows
+            ],
+        })

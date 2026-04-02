@@ -187,4 +187,108 @@ def ping_sitemaps(self) -> None:
     name="core.tasks.process_image",
 )
 def process_image(self, media_id: int) -> None:
-    logger.info("process_image queued: media_id=%d (pending media app).", media_id)
+    """
+    Post-upload image processing:
+      1. Strip EXIF metadata (privacy — Pillow drops it on re-encode).
+      2. Resize to MAX_WIDTH=1600px if the original is wider.
+      3. Re-encode: JPEG @ quality 85 / PNG optimised / WebP @ quality 85.
+      4. Overwrite the file at the same storage path and update size_bytes,
+         width, height on the MediaAsset record.
+
+    Skips gracefully when Pillow is not installed or the asset is missing.
+    """
+    import io
+
+    try:
+        from media_assets.models import MediaAsset
+    except ImportError:
+        logger.error("process_image: media_assets app not available.")
+        return
+
+    try:
+        asset = MediaAsset.objects.get(pk=media_id)
+    except MediaAsset.DoesNotExist:
+        logger.warning("process_image: MediaAsset pk=%d not found — skipping.", media_id)
+        return
+
+    if not asset.file:
+        logger.warning("process_image: MediaAsset pk=%d has no file — skipping.", media_id)
+        return
+
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning(
+            "process_image: Pillow not installed — skipping processing for pk=%d.", media_id
+        )
+        return
+
+    try:
+        # Read the original file into memory so we can close the storage
+        # handle before writing back.
+        with asset.file.open("rb") as fh:
+            raw = fh.read()
+
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+
+        original_format = img.format or "JPEG"
+        original_w, original_h = img.size
+
+        # Normalise colour mode.  EXIF is stripped implicitly because Pillow
+        # never copies it when saving to a new buffer.
+        if original_format == "JPEG" and img.mode != "RGB":
+            img = img.convert("RGB")
+        elif original_format == "PNG" and img.mode not in ("RGB", "RGBA", "L"):
+            img = img.convert("RGBA")
+
+        # Cap maximum width.
+        MAX_WIDTH = 1600
+        if original_w > MAX_WIDTH:
+            ratio = MAX_WIDTH / original_w
+            new_h = int(original_h * ratio)
+            img   = img.resize((MAX_WIDTH, new_h), Image.LANCZOS)
+            logger.info(
+                "process_image: pk=%d resized %dx%d → %dx%d.",
+                media_id, original_w, original_h, MAX_WIDTH, new_h,
+            )
+
+        save_format = original_format if original_format in ("JPEG", "PNG", "WEBP") else "JPEG"
+        save_kwargs = {
+            "JPEG": {"quality": 85, "optimize": True},
+            "PNG":  {"optimize": True},
+            "WEBP": {"quality": 85, "method": 4},
+        }.get(save_format, {})
+
+        buffer = io.BytesIO()
+        img.save(buffer, format=save_format, **save_kwargs)
+        processed_bytes = buffer.tell()
+        buffer.seek(0)
+
+        # Overwrite the file at the *exact* existing storage path.
+        # default_storage._save bypasses FileSystemStorage's collision-avoidance
+        # renaming so the URL stored on the asset remains valid.
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+
+        existing_name = asset.file.name
+        default_storage._save(existing_name, ContentFile(buffer.read()))
+
+        # Persist updated metadata.
+        new_w, new_h = img.size
+        update_fields = ["size_bytes"]
+        asset.size_bytes = processed_bytes
+        if new_w != original_w or new_h != original_h:
+            asset.width  = new_w
+            asset.height = new_h
+            update_fields += ["width", "height"]
+        asset.save(update_fields=update_fields)
+
+        logger.info(
+            "process_image: pk=%d done — %s %dx%d %d bytes.",
+            media_id, save_format, new_w, new_h, processed_bytes,
+        )
+
+    except Exception as exc:
+        logger.error("process_image: pk=%d failed: %s", media_id, exc)
+        raise self.retry(exc=exc)

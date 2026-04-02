@@ -1,41 +1,93 @@
-# Next.js Frontend Integration Guide
+﻿# Next.js Frontend Build Guide
 
-This document is the frontend-facing handbook for building the The Granite Post web app against this Django REST API.
+This is the main build document for the The Granite Post frontend.
 
-It is written for a Next.js App Router frontend and covers:
+Use this guide if you are building the web app in Next.js against the completed Django REST API in this repository.
 
-- base URLs and environment variables
-- API conventions shared across apps
-- staff auth vs reader auth
-- page-to-endpoint mapping
-- public site flows
-- reader account and subscription flows
-- staff dashboard and CMS flows
-- advertising and push notification integration
-- recommended Next.js structure and implementation order
+Companion docs:
+- [ADVERTISING_FRONTEND_GUIDE.md](C:/dev/thegraniteAPI/docs/ADVERTISING_FRONTEND_GUIDE.md)
 
 
-## 1. Project Context
+## 1. What This Frontend Needs To Do
 
-The backend is a Django 6 + DRF newsroom CMS for The Granite Post.
+The frontend has three jobs:
 
-- Local backend URL: `http://127.0.0.1:8000`
-- Local frontend URL: `http://localhost:3000`
-- Public API prefix: `/api/v1/`
-- OpenAPI schema: `/api/schema/`
-- Swagger docs: `/api/docs/`
-- Health check: `/health/`
+1. Public news site
+2. Reader account and subscription area
+3. Staff CMS and newsroom dashboard
 
-The backend serves both:
-
-- the public news site
-- authenticated reader features
-- authenticated staff CMS features
+The backend already supports all three. The frontend should keep them clearly separated in code, auth handling, and route structure.
 
 
-## 2. Frontend Environment Variables
+## 2. Backend Summary
 
-Recommended frontend env vars:
+Local backend:
+
+```text
+http://127.0.0.1:8000
+```
+
+Important backend URLs:
+
+```text
+GET  /health/
+GET  /api/v1/
+GET  /api/schema/
+GET  /api/docs/
+```
+
+Main API prefix:
+
+```text
+/api/v1/
+```
+
+The frontend will usually talk only to:
+
+- `/api/v1/articles/`
+- `/api/v1/categories/`
+- `/api/v1/tags/`
+- `/api/v1/sections/`
+- `/api/v1/users/`
+- `/api/v1/search/`
+- `/api/v1/comments/` via article comment routes
+- `/api/v1/newsletter/`
+- `/api/v1/accounts/`
+- `/api/v1/subscriptions/`
+- `/api/v1/media/`
+- `/api/v1/staff/`
+- `/api/v1/ads/`
+- `/api/v1/notifications/`
+- `/api/v1/analytics/`
+
+
+## 3. Recommended Frontend Stack
+
+Recommended stack:
+
+- Next.js 15+ with App Router
+- TypeScript
+- Server Components for public content pages
+- Client Components for forms, tracking, auth actions, comments, bookmarks, and polling
+- Route handlers or server actions for secure token handling
+- `zod` or similar for response validation if you want runtime safety
+
+Recommended packages:
+
+```bash
+npm install zod clsx date-fns
+```
+
+Optional but useful:
+
+```bash
+npm install react-hook-form @hookform/resolvers
+```
+
+
+## 4. Frontend Environment Variables
+
+Create frontend env vars like this:
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
@@ -43,223 +95,27 @@ API_BASE_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
-Recommended usage:
+Use them like this:
 
 - `API_BASE_URL` for server-side fetches
-- `NEXT_PUBLIC_API_BASE_URL` for browser-side tracking or auth calls
-- `NEXT_PUBLIC_SITE_URL` for absolute frontend links when needed
+- `NEXT_PUBLIC_API_BASE_URL` for browser-side requests
+- `NEXT_PUBLIC_SITE_URL` for absolute frontend links if needed
 
-If the frontend runs on a different origin, make sure the backend has that origin in `CORS_ALLOWED_ORIGINS`.
-
-
-## 3. Non-Negotiable Frontend Rules
-
-1. Treat staff auth and reader auth as two separate systems.
-2. Public pages must never assume draft or review content is available.
-3. Use server-side data fetching for public GET endpoints wherever possible.
-4. Use client-side requests only for interactive behavior like comments, tracking, login, logout, bookmarks, notifications, and payment polling.
-5. Prefer secure `httpOnly` cookies managed by Next.js route handlers or server actions instead of storing JWTs in `localStorage`.
+If your frontend runs on another origin, make sure the backend includes that origin in `CORS_ALLOWED_ORIGINS`.
 
 
-## 4. API Conventions
+## 5. Non-Negotiable Frontend Rules
 
-### 4.1 Pagination
-
-Most list endpoints that use shared pagination return this envelope:
-
-```json
-{
-  "status": "ok",
-  "count": 120,
-  "total_pages": 6,
-  "current_page": 1,
-  "page_size": 20,
-  "next": "http://127.0.0.1:8000/api/v1/articles/?page=2",
-  "previous": null,
-  "results": []
-}
-```
-
-Default page size is `20`.
-
-Common query params:
-
-- `page`
-- `page_size`
+1. Treat staff auth and reader auth as different systems.
+2. Do not assume draft or review content is available on public routes.
+3. Prefer server-side fetching for public read endpoints.
+4. Use client-side requests for interactive features only.
+5. Prefer secure cookies over `localStorage` for JWT storage.
+6. Public pages must handle `402` paywall responses on premium content.
+7. Preserve backend HTML fields like article `body` and search `headline` carefully.
 
 
-### 4.2 Error Shape
-
-Most DRF errors are normalized by the shared exception handler into this shape:
-
-```json
-{
-  "status": "error",
-  "code": "validation_error",
-  "message": "Validation failed. Please correct the errors below.",
-  "errors": {
-    "email": "This field is required."
-  }
-}
-```
-
-Possible `code` values you should handle in the UI include:
-
-- `authentication_required`
-- `authentication_failed`
-- `permission_denied`
-- `not_found`
-- `rate_limit_exceeded`
-- `validation_error`
-- `internal_server_error`
-
-Some throttled responses may also include:
-
-```json
-{
-  "retry_after_seconds": 30
-}
-```
-
-
-### 4.3 Date and Time
-
-API dates are usually ISO strings:
-
-- `DateField`: `2026-03-29`
-- `DateTimeField`: `2026-03-29T14:47:59Z`
-
-Display in the frontend using the site locale and timezone rules you want, but preserve the raw values from the API.
-
-
-### 4.4 Authorization Header
-
-When sending JWTs directly to the backend:
-
-```http
-Authorization: Bearer <token>
-```
-
-
-## 5. Auth Model
-
-There are two auth systems in this backend.
-
-### 5.1 Staff JWT
-
-Use for newsroom/CMS/admin UI.
-
-Endpoints:
-
-- `POST /api/v1/auth/token/`
-- `POST /api/v1/auth/token/refresh/`
-- `POST /api/v1/auth/token/blacklist/`
-- `GET /api/v1/auth/me/`
-- `POST /api/v1/auth/change-password/`
-
-Login request:
-
-```json
-{
-  "username": "thegranite",
-  "password": "Strive@3934#"
-}
-```
-
-Login response shape:
-
-```json
-{
-  "refresh": "<jwt>",
-  "access": "<jwt>",
-  "user": {
-    "id": 1,
-    "username": "thegranite",
-    "display_name": "The Granite",
-    "slug": "thegranite",
-    "role": "admin",
-    "role_display": "Admin",
-    "avatar_url": "",
-    "title": "",
-    "can_publish": true,
-    "can_edit_any_article": true,
-    "can_manage_staff": true,
-    "is_editorial_admin": true
-  }
-}
-```
-
-Staff roles:
-
-- `contributor`
-- `author`
-- `moderator`
-- `editor`
-- `senior_editor`
-- `admin`
-
-
-### 5.2 Reader JWT
-
-Use for the consumer-facing account area.
-
-Endpoints:
-
-- `POST /api/v1/accounts/register/`
-- `GET /api/v1/accounts/verify-email/?token=...`
-- `POST /api/v1/accounts/login/`
-- `POST /api/v1/accounts/logout/`
-- `POST /api/v1/accounts/token/refresh/`
-- `GET /api/v1/accounts/me/`
-- `PATCH /api/v1/accounts/me/`
-- `POST /api/v1/accounts/change-password/`
-- `POST /api/v1/accounts/forgot-password/`
-- `POST /api/v1/accounts/reset-password/`
-
-Reader login request:
-
-```json
-{
-  "email": "reader@example.com",
-  "password": "StrongPass123!"
-}
-```
-
-Reader login response shape:
-
-```json
-{
-  "refresh": "<jwt>",
-  "access": "<jwt>",
-  "reader": {
-    "id": "uuid",
-    "email": "reader@example.com",
-    "username": "reader1",
-    "display_name": "Reader One",
-    "public_name": "Reader One",
-    "avatar_url": "",
-    "bio": "",
-    "is_email_verified": true,
-    "date_joined": "2026-03-29T12:00:00Z",
-    "last_login": "2026-03-29T12:30:00Z",
-    "bookmark_count": 0
-  }
-}
-```
-
-
-### 5.3 Important Auth Warning
-
-Staff and reader tokens are not interchangeable.
-
-- Staff token != reader token
-- `/api/v1/auth/*` is for staff
-- `/api/v1/accounts/*` is for readers
-
-Keep them in separate cookie namespaces if the frontend supports both.
-
-
-## 6. Suggested Next.js Architecture
+## 6. Recommended App Structure
 
 Recommended route groups:
 
@@ -280,6 +136,7 @@ src/
       login/page.tsx
       register/page.tsx
       verify-email/page.tsx
+      reset-password/page.tsx
       account/page.tsx
       account/bookmarks/page.tsx
       account/history/page.tsx
@@ -292,8 +149,9 @@ src/
       cms/media/page.tsx
       cms/comments/page.tsx
       cms/newsletter/page.tsx
-      cms/ads/page.tsx
       cms/subscriptions/page.tsx
+      cms/ads/page.tsx
+      cms/staff/page.tsx
   lib/
     api/
       public.ts
@@ -303,6 +161,9 @@ src/
     auth/
       reader-session.ts
       staff-session.ts
+    subscriptions/
+      subscribe.ts
+      poll.ts
     advertising/
       api.ts
       track-click.ts
@@ -311,17 +172,141 @@ src/
 
 Recommended separation:
 
-- `public.ts` for unauthenticated GETs
-- `reader.ts` for account/subscription calls
-- `staff.ts` for CMS/editorial calls
-- separate cookie/session helpers for reader and staff auth
+- `public.ts` for public GET requests
+- `reader.ts` for `/accounts/*` and `/subscriptions/*` reader routes
+- `staff.ts` for `/auth/*`, `/staff/*`, article writes, media, moderation, and ad management
 
 
-## 7. Public Site: Page-to-Endpoint Map
+## 7. API Conventions
 
-### 7.1 Homepage
+### 7.1 Pagination
 
-Recommended homepage data sources:
+Shared paginated endpoints usually return:
+
+```json
+{
+  "count": 120,
+  "next": "http://127.0.0.1:8000/api/v1/articles/?page=2",
+  "previous": null,
+  "results": []
+}
+```
+
+Some endpoints also include extra fields like:
+
+- `status`
+- `total_pages`
+- `current_page`
+- `page_size`
+
+Do not hardcode one exact pagination envelope for every endpoint. Normalize it in the frontend.
+
+### 7.2 Common status codes
+
+Handle these consistently:
+
+- `200` success
+- `201` created
+- `202` accepted
+- `400` validation or bad token/query
+- `401` unauthenticated
+- `402` premium/paywall required
+- `403` authenticated but not allowed
+- `404` not found
+- `409` duplicate/conflict
+- `429` throttled
+- `502` upstream payment initiation problem
+
+### 7.3 Dates
+
+The API uses ISO strings.
+
+Examples:
+
+```text
+2026-04-01
+2026-04-01T08:30:00Z
+```
+
+### 7.4 Auth header
+
+When sending a token directly:
+
+```http
+Authorization: Bearer <token>
+```
+
+
+## 8. Auth Model
+
+There are two completely separate auth systems.
+
+### 8.1 Staff auth
+
+Use for the newsroom and CMS.
+
+Endpoints:
+
+- `POST /api/v1/auth/token/`
+- `POST /api/v1/auth/token/refresh/`
+- `POST /api/v1/auth/token/blacklist/`
+- `GET /api/v1/auth/me/`
+- `POST /api/v1/auth/change-password/`
+
+Staff login payload:
+
+```json
+{
+  "username": "thegranite",
+  "password": "your-password"
+}
+```
+
+Staff login response contains:
+
+- `access`
+- `refresh`
+- `user`
+
+### 8.2 Reader auth
+
+Use for the public account area.
+
+Endpoints:
+
+- `POST /api/v1/accounts/register/`
+- `GET /api/v1/accounts/verify-email/?token=...`
+- `POST /api/v1/accounts/login/`
+- `POST /api/v1/accounts/logout/`
+- `POST /api/v1/accounts/token/refresh/`
+- `GET /api/v1/accounts/me/`
+- `PATCH /api/v1/accounts/me/`
+- `POST /api/v1/accounts/change-password/`
+- `POST /api/v1/accounts/forgot-password/`
+- `POST /api/v1/accounts/reset-password/`
+
+Reader login payload:
+
+```json
+{
+  "email": "reader@example.com",
+  "password": "StrongPass123!"
+}
+```
+
+### 8.3 Important warning
+
+- Staff token does not work on reader endpoints.
+- Reader token does not work on staff endpoints.
+
+Keep them in different cookie namespaces.
+
+
+## 9. Public Site Pages
+
+### 9.1 Homepage
+
+Recommended API calls:
 
 - `GET /api/v1/sections/?primary=true`
 - `GET /api/v1/articles/breaking/`
@@ -329,16 +314,10 @@ Recommended homepage data sources:
 - `GET /api/v1/articles/featured/`
 - `GET /api/v1/articles/`
 - `GET /api/v1/ads/zones/homepage-leaderboard/`
-- `GET /api/v1/ads/zones/homepage-hero/` if configured
 
-Rendering guidance:
+Build this page mostly as a server-rendered page.
 
-- render most homepage data in server components
-- render ads in a component that can trigger client-side impression tracking
-- render newsletter signup as a client form
-
-
-### 7.2 Article Detail Page
+### 9.2 Article detail
 
 Route example:
 
@@ -346,107 +325,64 @@ Route example:
 /articles/[slug]
 ```
 
-Required backend calls:
+API calls:
 
 - `GET /api/v1/articles/<slug>/`
 - `GET /api/v1/articles/<slug>/comments/`
 - `POST /api/v1/analytics/articles/<slug>/view/`
-- `GET /api/v1/ads/zones/in-article/` if used
-- `POST /api/v1/ads/<campaign-id>/impression/`
-- `POST /api/v1/ads/<campaign-id>/click/`
+- optional ad zone calls for in-article inventory
 
-Frontend split:
+Important behavior:
 
-- fetch article data on the server
-- record article view in a client effect
-- lazy-load or client-fetch comments if you want faster first paint
-- fire ad impressions only when the creative is actually visible
+- Premium articles may return `402` to non-subscribers.
+- The frontend should catch `402` and show a subscription CTA instead of a generic error page.
 
+### 9.3 Categories
 
-### 7.3 Category Pages
-
-Route example:
+Routes:
 
 ```text
 /categories/[slug]
 ```
 
-Backend calls:
+API calls:
 
 - `GET /api/v1/categories/`
 - `GET /api/v1/categories/<slug>/`
 
-Category detail response shape:
+### 9.4 Tags
 
-```json
-{
-  "category": {
-    "id": 1,
-    "name": "Politics",
-    "slug": "politics",
-    "description": "",
-    "og_image_url": ""
-  },
-  "articles": []
-}
-```
-
-Note: category detail is currently not paginated. The frontend should handle full-array responses.
-
-
-### 7.4 Tag Pages
-
-Route example:
+Routes:
 
 ```text
 /tags/[slug]
 ```
 
-Backend calls:
+API calls:
 
 - `GET /api/v1/tags/`
 - `GET /api/v1/tags/<slug>/`
 
-Tag detail response shape:
+### 9.5 Sections
 
-```json
-{
-  "tag": {
-    "id": 1,
-    "name": "elections",
-    "slug": "elections"
-  },
-  "articles": []
-}
+Routes:
+
+```text
+/sections/[slug]
 ```
 
-
-### 7.5 Section Pages
-
-Use sections for top-level site navigation.
-
-Backend calls:
+API calls:
 
 - `GET /api/v1/sections/?primary=true`
 - `GET /api/v1/sections/?primary=false`
 - `GET /api/v1/sections/<slug>/`
 - `GET /api/v1/sections/<slug>/articles/`
 
-Section detail returns:
+Use section detail for hero plus initial articles, then section articles for paginated loads or category tabs.
 
-- section metadata
-- `hero_article`
-- section categories
-- latest 20 articles
+### 9.6 Authors
 
-`/api/v1/sections/<slug>/articles/` is paginated and supports:
-
-- `?category=<category-slug>`
-
-
-### 7.6 Author Pages
-
-Frontend route example:
+Frontend route examples:
 
 ```text
 /authors
@@ -458,38 +394,9 @@ API calls:
 - `GET /api/v1/users/`
 - `GET /api/v1/users/<slug>/`
 
-Important:
+### 9.7 Search
 
-- the frontend route can be `/authors/*`
-- the API route is `/users/*`
-
-Author detail response shape:
-
-```json
-{
-  "user": {
-    "id": 1,
-    "byline": "Jane Dube",
-    "slug": "jane-dube",
-    "title": "Senior Reporter",
-    "bio": "",
-    "avatar_url": "",
-    "beat": "Politics",
-    "twitter_handle": "",
-    "linkedin_url": "",
-    "email_public": "",
-    "article_count": 12
-  },
-  "articles": []
-}
-```
-
-Note: author detail is also not paginated right now.
-
-
-### 7.7 Search Page
-
-Frontend route example:
+Route example:
 
 ```text
 /search?q=zimbabwe
@@ -499,384 +406,142 @@ API call:
 
 - `GET /api/v1/search/?q=<query>&page=1&page_size=20`
 
-Search response shape:
+Current rules:
 
-```json
-{
-  "status": "ok",
-  "query": "zimbabwe",
-  "count": 18,
-  "total_pages": 1,
-  "current_page": 1,
-  "next": null,
-  "previous": null,
-  "results": [
-    {
-      "rank": 0.8432,
-      "headline": "The latest <mark>Zimbabwe</mark> update...",
-      "article": {}
-    }
-  ]
-}
-```
+- minimum query length: `2`
+- maximum query length: `200`
+- `page_size` max: `50`
+- endpoint is throttled, so avoid keystroke-by-keystroke live firing without debounce
 
-Search rules:
+Important:
 
-- minimum query length: 2
-- maximum query length: 200
-- `page_size` max: 50
-
-Frontend note:
-
-- `headline` contains `<mark>` tags from the backend for highlighting
-- render as trusted backend HTML or strip tags before display
+- search `headline` may contain `<mark>` tags
+- premium article results are searchable, but premium body text is not exposed in the snippet
 
 
-## 8. Public Content Types
+## 10. Comments, Newsletter, Analytics, Push, Ads
 
-These are the core public article payloads.
+### 10.1 Comments
 
-```ts
-export type Category = {
-  id: number;
-  name: string;
-  slug: string;
-  description: string;
-  og_image_url: string;
-};
-
-export type Tag = {
-  id: number;
-  name: string;
-  slug: string;
-};
-
-export type ArticleListItem = {
-  id: number;
-  title: string;
-  slug: string;
-  excerpt: string;
-  status: string;
-  author_name: string;
-  category: Category | null;
-  tags: Tag[];
-  is_breaking: boolean;
-  top_story_rank: number | null;
-  is_top_story: boolean;
-  is_featured: boolean;
-  featured_rank: number | null;
-  is_live: boolean;
-  needs_banner: boolean;
-  image_url: string;
-  image_alt: string;
-  published_at: string | null;
-  created_at: string;
-  view_count: number;
-};
-
-export type ArticleDetail = ArticleListItem & {
-  body: string;
-  image_caption: string;
-  image_credit: string;
-  og_title: string;
-  og_description: string;
-  og_image_url: string;
-  canonical_url: string;
-  seo_title: string;
-  seo_description: string;
-  resolved_og_image: string;
-  updated_at: string;
-};
-
-export type TopStorySlot = {
-  rank: number;
-  article: ArticleListItem | null;
-};
-```
-
-
-## 9. Comments, Newsletter, Analytics, Ads, Notifications
-
-### 9.1 Comments
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/articles/<slug>/comments/`
 - `POST /api/v1/articles/<slug>/comments/`
 
-Read response:
-
-```json
-{
-  "count": 2,
-  "results": [
-    {
-      "id": 1,
-      "author_name": "Reader",
-      "body": "Great story",
-      "created_at": "2026-03-29T10:00:00Z",
-      "is_reply": false,
-      "parent": null,
-      "replies": []
-    }
-  ]
-}
-```
-
-Create request:
-
-```json
-{
-  "author_name": "Reader",
-  "author_email": "reader@example.com",
-  "body": "Great story",
-  "parent": null
-}
-```
-
-Create response:
-
-```json
-{
-  "detail": "Your comment has been submitted and is awaiting moderation.",
-  "id": 12
-}
-```
-
-Important:
+Notes:
 
 - public only sees approved comments
-- new comments are submitted as pending
-- replies are only one level deep
-- POST is rate-limited
+- new comments are pending by default
+- replies are one level deep
 
+### 10.2 Newsletter
 
-### 9.2 Newsletter
-
-Endpoints:
+API calls:
 
 - `POST /api/v1/newsletter/subscribe/`
 - `GET /api/v1/newsletter/confirm/?token=...`
 - `POST /api/v1/newsletter/unsubscribe/`
 
-Subscribe request:
-
-```json
-{
-  "email": "reader@example.com",
-  "source": "footer"
-}
-```
-
-Subscribe response:
-
-```json
-{
-  "detail": "Thank you for subscribing. Please check your email for a confirmation link."
-}
-```
-
-Recommended use:
+Recommended placements:
 
 - footer form
 - article inline CTA
-- exit-intent or homepage modal if desired
+- homepage block
 
+### 10.3 Analytics
 
-### 9.3 Article View Analytics
-
-Endpoint:
+API calls:
 
 - `POST /api/v1/analytics/articles/<slug>/view/`
+- `GET /api/v1/analytics/trending/`
+- `GET /api/v1/analytics/articles/<slug>/stats/` for staff dashboards if needed
 
-Response:
+### 10.4 Push notifications
 
-```json
-{
-  "article_slug": "granite-story",
-  "view_count": 124,
-  "recorded": true
-}
-```
+API calls:
 
-Behavior:
+- `GET /api/v1/notifications/vapid-public-key/`
+- `POST /api/v1/notifications/subscribe/`
+- `POST /api/v1/notifications/unsubscribe/`
 
-- one count per IP per article per day
-- staff views are not counted
-- fire this in a client effect once per page view
+Browser flow:
 
+1. ask for permission
+2. fetch VAPID key
+3. call `pushManager.subscribe()`
+4. POST subscription payload to backend
 
-### 9.4 Advertising
+### 10.5 Advertising
 
-Use these endpoints for ad rendering and tracking:
+API calls:
 
 - `GET /api/v1/ads/zones/`
 - `GET /api/v1/ads/zones/<slug>/`
 - `POST /api/v1/ads/<campaign-id>/impression/`
 - `POST /api/v1/ads/<campaign-id>/click/`
 
-Important ad behavior:
+Read the full ad contract here:
 
-- zone results are cached for 60 seconds
-- only currently running campaigns are returned
-- click tracking returns the redirect URL
-- staff impressions are not counted
-
-Read the deeper ad-specific guide here:
-
-- `docs/ADVERTISING_FRONTEND_GUIDE.md`
+- [ADVERTISING_FRONTEND_GUIDE.md](C:/dev/thegraniteAPI/docs/ADVERTISING_FRONTEND_GUIDE.md)
 
 
-### 9.5 Push Notifications
+## 11. Reader Features
 
-Endpoints:
+### 11.1 Registration and login
 
-- `GET /api/v1/notifications/vapid-public-key/`
-- `POST /api/v1/notifications/subscribe/`
-- `POST /api/v1/notifications/unsubscribe/`
+Pages to build:
 
-The browser flow is:
+- `/register`
+- `/login`
+- `/verify-email`
+- `/forgot-password`
+- `/reset-password`
 
-1. Request notification permission
-2. Fetch VAPID public key from backend
-3. Call `pushManager.subscribe()`
-4. POST the resulting `endpoint`, `p256dh`, `auth`, and `user_agent` to the backend
+### 11.2 Profile
 
-Subscribe request:
-
-```json
-{
-  "endpoint": "https://push.example/...",
-  "p256dh": "base64-key",
-  "auth": "base64-auth",
-  "user_agent": "Mozilla/5.0 ..."
-}
-```
-
-If the server is not configured for push, `GET /notifications/vapid-public-key/` returns `503`.
-
-
-## 10. Reader Area
-
-### 10.1 Registration and Verification
-
-Endpoints:
-
-- `POST /api/v1/accounts/register/`
-- `GET /api/v1/accounts/verify-email/?token=...`
-
-Register request:
-
-```json
-{
-  "email": "reader@example.com",
-  "username": "reader1",
-  "password": "StrongPass123!",
-  "display_name": "Reader One"
-}
-```
-
-Registration returns the reader profile, but login is blocked until email verification succeeds.
-
-
-### 10.2 Profile
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/accounts/me/`
 - `PATCH /api/v1/accounts/me/`
+- `POST /api/v1/accounts/change-password/`
 
-Patchable fields:
+### 11.3 Bookmarks
 
-- `display_name`
-- `avatar_url`
-- `bio`
-
-
-### 10.3 Bookmarks
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/accounts/bookmarks/`
 - `POST /api/v1/accounts/bookmarks/`
-- `DELETE /api/v1/accounts/bookmarks/<article-slug>/`
+- `DELETE /api/v1/accounts/bookmarks/<slug>/`
 
-Create bookmark request:
+Duplicate bookmark behavior:
 
-```json
-{
-  "article_slug": "granite-story"
-}
-```
+- returns `409`
 
-Duplicate bookmark response:
+### 11.4 Reading history
 
-- HTTP `409`
-- `{"detail": "You have already bookmarked this article."}`
-
-
-### 10.4 Reading History
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/accounts/history/`
 - `POST /api/v1/accounts/history/`
 - `DELETE /api/v1/accounts/history/`
 
-Record history request:
 
-```json
-{
-  "article_slug": "granite-story"
-}
-```
+## 12. Subscription and Paywall Flow
 
-
-## 11. Subscriptions and Paywall
-
-The active subscription API lives under `/api/v1/subscriptions/`.
-
-Ignore the separate `subscription` app in the repo. Its URL config is empty.
-
-### 11.1 Public Plans
-
-Endpoint:
+Main endpoints:
 
 - `GET /api/v1/subscriptions/plans/`
-
-Plan fields:
-
-- `id`
-- `name`
-- `slug`
-- `description`
-- `price_usd`
-- `billing_period`
-- `billing_period_label`
-- `features`
-- `article_access`
-- `article_access_label`
-
-Useful enum values:
-
-- billing periods: `monthly`, `annual`
-- article access: `free_only`, `premium`, `all`
-
-
-### 11.2 Reader Subscription Status
-
-Endpoint:
-
 - `GET /api/v1/subscriptions/my-subscription/`
-
-Returns the latest subscription or `404` if none exists.
-
-
-### 11.3 Start Subscription
-
-Endpoint:
-
 - `POST /api/v1/subscriptions/subscribe/`
+- `POST /api/v1/subscriptions/cancel/`
+- `GET /api/v1/subscriptions/payments/`
+- `GET /api/v1/subscriptions/paynow-poll/<payment-id>/`
+
+### 12.1 Plan listing
+
+Use `GET /api/v1/subscriptions/plans/` for the pricing page.
+
+### 12.2 Starting a subscription
 
 Request:
 
@@ -898,67 +563,77 @@ Payment methods:
 Behavior:
 
 - free plan activates immediately
-- paid plan creates a subscription in `trialing`
-- response includes subscription data plus `redirect_url` and `poll_url`
+- paid plan creates a `trialing` subscription
+- response includes subscription fields plus `redirect_url` and `poll_url`
 
-Frontend flow for paid plans:
+### 12.3 Important implementation note for polling
 
-1. POST subscribe
-2. redirect reader to `redirect_url` if present
-3. poll `GET /api/v1/subscriptions/paynow-poll/<payment-id>/`
-4. update paywall state once `paid: true`
+The current subscribe response does **not** include the `payment_id` needed by:
 
-
-### 11.4 Cancel Subscription
-
-Endpoint:
-
-- `POST /api/v1/subscriptions/cancel/`
-
-Request:
-
-```json
-{
-  "cancel_immediately": false
-}
+```text
+GET /api/v1/subscriptions/paynow-poll/<payment-id>/
 ```
 
+So the safest frontend flow today is:
 
-### 11.5 Payment History
+1. `POST /api/v1/subscriptions/subscribe/`
+2. if `redirect_url` exists, send the reader there
+3. immediately call `GET /api/v1/subscriptions/payments/`
+4. pick the newest pending payment for the current reader
+5. use that `payment.id` for polling `/subscriptions/paynow-poll/<payment-id>/`
 
-Endpoint:
+Do not assume `subscription.id` is the same as `payment.id`. It is not.
 
-- `GET /api/v1/subscriptions/payments/`
+### 12.4 Generic payment errors
 
-Paginated response with fields like:
+The backend now returns stable generic payment messages.
 
-- `id`
-- `amount_usd`
-- `currency`
-- `payment_method`
-- `payment_method_label`
-- `status`
-- `status_label`
-- `paynow_reference`
-- `created_at`
-- `updated_at`
+Examples:
+
+- `Unable to initiate payment right now. Please try again.`
+- `Unable to verify payment status right now. Please refresh and try again.`
+
+Do not build UI that depends on provider-specific error text.
+
+### 12.5 Paywall behavior
+
+Premium article requests may return `402` with upgrade information.
+
+The frontend should:
+
+- show a paywall panel
+- link to subscription plans
+- preserve the article URL so the user can return after subscribing
 
 
-## 12. Staff Dashboard and CMS
+## 13. Staff CMS
 
-### 12.1 Staff Session Bootstrap
+### 13.1 Staff session bootstrap
 
-At login:
+At CMS login:
 
 1. `POST /api/v1/auth/token/`
 2. store `access` and `refresh`
-3. store the returned `user`
-4. optionally refresh session data with `GET /api/v1/auth/me/`
+3. store returned `user`
+4. optionally refresh with `GET /api/v1/auth/me/`
 
+### 13.2 CMS pages to build
 
-### 12.2 Articles
+Recommended pages:
 
-Endpoints:
+- `/cms`
+- `/cms/articles`
+- `/cms/articles/[slug]`
+- `/cms/media`
+- `/cms/comments`
+- `/cms/newsletter`
+- `/cms/subscriptions`
+- `/cms/ads`
+- `/cms/staff`
+
+### 13.3 Article management
+
+API calls:
 
 - `GET /api/v1/articles/`
 - `POST /api/v1/articles/`
@@ -966,103 +641,33 @@ Endpoints:
 - `PATCH /api/v1/articles/<slug>/`
 - `DELETE /api/v1/articles/<slug>/`
 
-Important editorial behavior:
+Notes:
 
-- public only sees published content
-- staff sees all statuses
-- delete archives the article instead of hard-deleting it
+- delete archives the article instead of hard deleting it
+- categories and tags do not currently have create/update API endpoints
+- media uploads produce URLs that are pasted into article image fields
 
-Write payload fields:
+### 13.4 Media library
 
-- `title`
-- `excerpt`
-- `body`
-- `status`
-- `category`
-- `tags`
-- `is_breaking`
-- `top_story_rank`
-- `featured_rank`
-- `image_url`
-- `image_alt`
-- `image_caption`
-- `image_credit`
-- `og_title`
-- `og_description`
-- `og_image_url`
-- `canonical_url`
-
-Article statuses:
-
-- `draft`
-- `review`
-- `published`
-- `archived`
-
-
-### 12.3 Categories and Tags
-
-Read endpoints:
-
-- `GET /api/v1/categories/`
-- `GET /api/v1/categories/<slug>/`
-- `GET /api/v1/tags/`
-- `GET /api/v1/tags/<slug>/`
-
-There is no create/update API for categories or tags in the current codebase. Those are currently managed through Django admin or shell tooling.
-
-
-### 12.4 Media Library
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/media/`
 - `POST /api/v1/media/`
 - `GET /api/v1/media/<id>/`
 - `DELETE /api/v1/media/<id>/`
 
-Upload format:
+Upload as `multipart/form-data`.
 
-- `multipart/form-data`
+### 13.5 Comment moderation
 
-Fields:
-
-- `file`
-- `alt_text`
-- `caption`
-- `credit`
-
-Validation:
-
-- JPEG, PNG, WebP only
-- max 10MB
-- min width 800px
-
-
-### 12.5 Comments Moderation
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/moderation/comments/?status=pending`
 - `PATCH /api/v1/moderation/comments/<id>/`
 
-Patch request:
+### 13.6 Staff management
 
-```json
-{
-  "action": "approve"
-}
-```
-
-Allowed actions:
-
-- `approve`
-- `reject`
-
-
-### 12.6 Staff Management
-
-Endpoints:
+API calls:
 
 - `GET /api/v1/staff/`
 - `POST /api/v1/staff/`
@@ -1070,30 +675,22 @@ Endpoints:
 - `PATCH /api/v1/staff/<id>/`
 - `DELETE /api/v1/staff/<id>/`
 
-Frontend use:
+### 13.7 Newsletter dashboard
 
-- staff directory
-- invite/create staff account
-- edit role/profile
-- deactivate staff
-
-
-### 12.7 Newsletter Dashboard
-
-Endpoint:
+API call:
 
 - `GET /api/v1/newsletter/subscribers/?confirmed=all`
 
-Filter options:
+### 13.8 Subscription dashboard
 
-- `confirmed=true`
-- `confirmed=false`
-- `confirmed=all`
+API calls:
 
+- `GET /api/v1/subscriptions/all/`
+- `GET /api/v1/subscriptions/revenue/`
 
-### 12.8 Advertising Dashboard
+### 13.9 Advertising dashboard
 
-Staff ad endpoints:
+API calls:
 
 - `GET /api/v1/ads/campaigns/`
 - `POST /api/v1/ads/campaigns/`
@@ -1103,128 +700,188 @@ Staff ad endpoints:
 - `POST /api/v1/ads/advertisers/`
 - `GET /api/v1/ads/report/<campaign-id>/`
 
-Use `docs/ADVERTISING_FRONTEND_GUIDE.md` for the deeper contract details.
 
-
-### 12.9 Subscription Admin
-
-Endpoints:
-
-- `GET /api/v1/subscriptions/all/`
-- `GET /api/v1/subscriptions/revenue/`
-
-This is useful for a revenue dashboard or membership operations panel.
-
-
-### 12.10 Notification Admin
-
-Endpoints:
-
-- `GET /api/v1/notifications/history/`
-- `POST /api/v1/notifications/test/`
-
-Use only in authenticated staff/admin views.
-
-
-## 13. Shared TypeScript Utilities
-
-Recommended shared types:
+## 14. Starter TypeScript Shapes
 
 ```ts
+export type ApiError = {
+  status?: string;
+  code?: string;
+  message?: string;
+  detail?: string;
+  errors?: Record<string, string | string[]>;
+  retry_after_seconds?: number;
+};
+
 export type PaginatedResponse<T> = {
-  status: string;
   count: number;
-  total_pages: number;
-  current_page: number;
-  page_size: number;
   next: string | null;
   previous: string | null;
   results: T[];
 };
 
-export type ApiError = {
-  status: "error";
-  code: string;
-  message: string;
-  errors?: Record<string, string>;
-  retry_after_seconds?: number;
-  request_id?: string;
+export type ArticleListItem = {
+  id: number;
+  title: string;
+  slug: string;
+  excerpt: string;
+  image_url: string;
+  image_alt: string;
+  published_at: string | null;
+  created_at: string;
+  is_breaking: boolean;
+  is_premium: boolean;
+  is_featured: boolean;
+  featured_rank: number | null;
+  top_story_rank: number | null;
+  category: {
+    id: number;
+    name: string;
+    slug: string;
+  } | null;
+  tags: Array<{
+    id: number;
+    name: string;
+    slug: string;
+  }>;
+};
+
+export type StaffSession = {
+  access: string;
+  refresh: string;
+  user: {
+    id: number;
+    username: string;
+    display_name: string;
+    slug: string;
+    role: string;
+    role_display: string;
+    can_publish: boolean;
+    can_edit_any_article: boolean;
+    can_manage_staff: boolean;
+    is_editorial_admin: boolean;
+  };
+};
+
+export type ReaderSession = {
+  access: string;
+  refresh: string;
+  reader: {
+    id: string;
+    email: string;
+    username: string;
+    display_name: string;
+    public_name: string;
+    avatar_url: string;
+    bio: string;
+    is_email_verified: boolean;
+    date_joined: string;
+    last_login: string | null;
+    bookmark_count: number;
+  };
 };
 ```
 
-Recommended fetch wrappers:
 
-- `getPublic<T>(path: string, init?: RequestInit)`
-- `getReader<T>(path: string, accessToken: string, init?: RequestInit)`
-- `getStaff<T>(path: string, accessToken: string, init?: RequestInit)`
-- `postJson<T>(...)`
-- `patchJson<T>(...)`
+## 15. Suggested Fetch Helpers
+
+```ts
+const API_BASE = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL!;
+
+export async function getPublic<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) throw await res.json();
+  return res.json();
+}
+
+export async function getWithBearer<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!res.ok) throw await res.json();
+  return res.json();
+}
+```
 
 
-## 14. Recommended Rendering Strategy
+## 16. Recommended Rendering Strategy
 
 Use server components for:
 
-- homepage content
-- article detail
-- section/category/tag/author pages
-- plan listing
-- staff list/detail pages that are mostly data views
+- homepage
+- article detail page shell
+- category, tag, section, author, and search result pages
+- plans page
+- staff dashboard list pages
 
 Use client components for:
 
-- login/register/password forms
-- comments submission
-- bookmark buttons
-- reading history writes
-- analytics view tracking
+- login/register/change-password/reset forms
+- comment submission
+- bookmark and history writes
+- article view analytics
 - ad impression and click tracking
-- Paynow payment polling
-- notification permission and push subscription
+- Paynow polling
+- push notification permission flow
 
 
-## 15. Build Order
+## 17. Build Order
 
-Recommended implementation order:
+Recommended order:
 
-1. Set up shared API client, error handler, and TypeScript models.
-2. Build the public site shell with sections-based navigation.
-3. Build homepage using breaking, top stories, featured, and latest articles.
-4. Build article detail pages with analytics and comments.
-5. Build category, tag, section, author, and search pages.
-6. Add newsletter signup.
-7. Add ad slot rendering and tracking.
-8. Build reader auth, profile, bookmarks, and history.
-9. Build subscriptions and Paynow polling.
-10. Build the staff CMS login and session handling.
-11. Build article/media/comments/newsletter/ads dashboards.
-12. Add push notifications if needed for launch.
-
-
-## 16. Recommended First-Release Pages
-
-If the frontend team wants the fastest path to a usable release, build these first:
-
-- homepage
-- article detail
-- category pages
-- search
-- author profiles
-- comments
-- newsletter signup
-- reader login/register
-- bookmarks
-- subscription plans and subscribe flow
+1. Set up env vars, API helpers, and shared TypeScript types
+2. Build the site shell and navigation from sections
+3. Build homepage
+4. Build article detail page
+5. Build category, tag, section, author, and search pages
+6. Add comments and newsletter subscription
+7. Add reader auth and account pages
+8. Add bookmarks and history
+9. Add subscriptions and paywall handling
+10. Add advertising slots and tracking
+11. Build staff login and CMS shell
+12. Build CMS article, media, comments, subscriptions, newsletter, ads, and staff pages
 
 
-## 17. Source of Truth
+## 18. Launch Checklist
 
-When in doubt, use these in this order:
+Before calling the frontend ready, verify:
+
+- homepage loads with sections, breaking, top stories, and featured content
+- article detail works for free and premium articles
+- `402` premium responses show a paywall UI, not a generic crash page
+- search works with debounce and pagination
+- comments submit and approved comments render
+- newsletter subscribe and confirm flows work
+- reader register, verify, login, logout, bookmarks, and history work
+- paid subscription flow works end to end with redirect plus polling
+- staff login and core CMS pages work
+- ads render and tracking calls succeed
+- push notification setup degrades cleanly if unavailable
+
+
+## 19. Source Of Truth
+
+When building, use these in this order:
 
 1. `http://127.0.0.1:8000/api/docs/`
 2. `http://127.0.0.1:8000/api/schema/`
 3. `postman/TheGraniteAPI.postman_collection.json`
-4. `docs/ADVERTISING_FRONTEND_GUIDE.md` for ad-specific integration
-5. the serializer and view files in the backend repo
+4. this guide
+5. the backend serializer and view files
 
-This guide is meant to accelerate frontend development, but the live schema and implemented views are the final contract.
+If the schema and this document ever disagree, trust the live schema and the implemented view code.

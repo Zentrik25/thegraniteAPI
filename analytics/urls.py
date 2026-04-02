@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import RecordViewView, TrendingArticlesView
+from .views import ArticleViewStatsView, RecordViewView, TrendingArticlesView
 
 app_name = "analytics"
 
@@ -14,5 +14,10 @@ urlpatterns = [
         "analytics/trending/",
         TrendingArticlesView.as_view(),
         name="trending",
+    ),
+    path(
+        "analytics/articles/<slug:slug>/stats/",
+        ArticleViewStatsView.as_view(),
+        name="article-stats",
     ),
 ]

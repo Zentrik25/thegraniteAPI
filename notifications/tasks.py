@@ -5,6 +5,11 @@ from celery import shared_task
 
 logger = logging.getLogger("notifications.tasks")
 
+# Maximum subscriptions processed per Celery task.
+# Keeps individual tasks short and lets Celery workers process batches in
+# parallel instead of one worker blocking on thousands of serial HTTP calls.
+_FANOUT_BATCH_SIZE = 100
+
 
 @shared_task(
     queue="slow",
@@ -60,6 +65,63 @@ def send_breaking_news_push(article_pk: int) -> None:
         sent_count = total,
     )
 
+    # Dispatch batches in parallel instead of a serial loop so that thousands
+    # of HTTP calls don't block a single worker for minutes.
+    sub_pks = list(subscriptions.values_list("pk", flat=True))
+    batch_count = 0
+    for i in range(0, len(sub_pks), _FANOUT_BATCH_SIZE):
+        batch = sub_pks[i : i + _FANOUT_BATCH_SIZE]
+        _send_push_batch.apply_async(
+            args=[notification.pk, batch],
+            queue="slow",
+        )
+        batch_count += 1
+
+    logger.info(
+        "Push notification queued: article=%s total=%d batches=%d",
+        article.slug,
+        total,
+        batch_count,
+    )
+
+
+@shared_task(
+    queue="slow",
+    ignore_result=True,
+    name="notifications.tasks._send_push_batch",
+)
+def _send_push_batch(notification_pk: int, subscription_pks: list) -> None:
+    """
+    Send push notifications to a batch of subscriptions.
+
+    Called exclusively by send_breaking_news_push to parallelise the fanout.
+    Each batch processes up to _FANOUT_BATCH_SIZE subscriptions so workers run
+    concurrently rather than one worker blocking on the full list.
+
+    Deactivates any subscriptions that return 410 Gone.
+    """
+    from .models import Notification, PushSubscription
+
+    try:
+        notification = Notification.objects.get(pk=notification_pk)
+    except Notification.DoesNotExist:
+        logger.error("_send_push_batch: Notification pk=%s not found.", notification_pk)
+        return
+
+    payload = json.dumps({
+        "title":    notification.title,
+        "body":     notification.body,
+        "url":      notification.url,
+        "icon":     notification.icon_url,
+        "badge":    "/static/icons/badge.png",
+        "tag":      f"breaking-{notification.article_id}",
+        "renotify": True,
+    })
+
+    subscriptions = PushSubscription.objects.filter(
+        pk__in=subscription_pks, is_active=True
+    )
+
     success_count = 0
     failed_count  = 0
     to_deactivate = []
@@ -74,25 +136,16 @@ def send_breaking_news_push(article_pk: int) -> None:
         else:
             failed_count += 1
 
-    # Deactivate subscriptions that returned 410 Gone.
     if to_deactivate:
-        PushSubscription.objects.filter(pk__in=to_deactivate).update(
-            is_active=False
-        )
+        PushSubscription.objects.filter(pk__in=to_deactivate).update(is_active=False)
         logger.info(
-            "Deactivated %d expired push subscriptions.",
+            "_send_push_batch: deactivated %d expired subscriptions.",
             len(to_deactivate),
         )
 
-    # Update notification stats.
-    notification.success_count = success_count
-    notification.failed_count  = failed_count
-    notification.save(update_fields=["success_count", "failed_count"])
-
     logger.info(
-        "Push notification sent: article=%s total=%d success=%d failed=%d",
-        article.slug,
-        total,
+        "_send_push_batch: notification=%s success=%d failed=%d",
+        notification_pk,
         success_count,
         failed_count,
     )
