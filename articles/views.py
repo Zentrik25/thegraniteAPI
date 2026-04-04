@@ -22,11 +22,12 @@ GET  /api/tags/<slug>/             — tag + its published articles
 
 from django.shortcuts import get_object_or_404
 from rest_framework import filters, generics, permissions, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsPagination
-from users.permissions import IsAuthorOrAbove
+from users.permissions import IsAuthorOrAbove, IsEditorOrAbove
 
 from .models import Article, Category, Tag, TOP_STORY_MAX, TOP_STORY_MIN
 from .serializers import (
@@ -34,7 +35,9 @@ from .serializers import (
     ArticleListSerializer,
     ArticleWriteSerializer,
     CategorySerializer,
+    CategoryWriteSerializer,
     TagSerializer,
+    TagWriteSerializer,
     TopStoryGridSerializer,
 )
 
@@ -201,14 +204,45 @@ class FeaturedArticlesView(generics.ListAPIView):
 # Category views
 # ---------------------------------------------------------------------------
 
-class CategoryListView(generics.ListAPIView):
-    queryset           = Category.objects.all()
-    serializer_class   = CategorySerializer
-    permission_classes = [permissions.AllowAny]
+class CategoryListView(APIView):
+    """
+    GET  /api/categories/  — list all categories (public)
+    POST /api/categories/  — create a category (Editor and above)
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsEditorOrAbove()]
+        return [permissions.AllowAny()]
+
+    def get(self, request):
+        categories = Category.objects.all()
+        return Response(CategorySerializer(categories, many=True).data)
+
+    def post(self, request):
+        serializer = CategoryWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = serializer.save()
+        return Response(
+            CategorySerializer(category).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CategoryDetailView(APIView):
-    permission_classes = [permissions.AllowAny]
+    """
+    GET    /api/categories/<slug>/  — category detail + paginated articles (public)
+    PATCH  /api/categories/<slug>/  — update category (Editor and above)
+    DELETE /api/categories/<slug>/  — delete category (Editor and above)
+
+    DELETE is refused if any articles (any status) belong to the category.
+    Reassign or archive those articles first.
+    """
+
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "DELETE"):
+            return [IsAuthenticated(), IsEditorOrAbove()]
+        return [permissions.AllowAny()]
 
     def get(self, request, slug):
         category = get_object_or_404(Category, slug=slug)
@@ -231,19 +265,77 @@ class CategoryDetailView(APIView):
             "articles":     ArticleListSerializer(page, many=True, context={"request": request}).data,
         })
 
+    def patch(self, request, slug):
+        category = get_object_or_404(Category, slug=slug)
+        serializer = CategoryWriteSerializer(category, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        category = serializer.save()
+        return Response(CategorySerializer(category).data)
+
+    def delete(self, request, slug):
+        category = get_object_or_404(Category, slug=slug)
+        article_count = category.articles.count()
+        if article_count > 0:
+            return Response(
+                {
+                    "detail": (
+                        f"Cannot delete '{category.name}' — {article_count} article(s) are assigned to it. "
+                        "Reassign or archive those articles first."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = category.name
+        category.delete()
+        return Response(
+            {"detail": f"Category '{name}' has been deleted."},
+            status=status.HTTP_200_OK,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tag views
 # ---------------------------------------------------------------------------
 
-class TagListView(generics.ListAPIView):
-    queryset           = Tag.objects.all()
-    serializer_class   = TagSerializer
-    permission_classes = [permissions.AllowAny]
+class TagListView(APIView):
+    """
+    GET  /api/tags/  — list all tags (public)
+    POST /api/tags/  — create a tag (Editor and above)
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsEditorOrAbove()]
+        return [permissions.AllowAny()]
+
+    def get(self, request):
+        tags = Tag.objects.all()
+        return Response(TagSerializer(tags, many=True).data)
+
+    def post(self, request):
+        serializer = TagWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        tag = serializer.save()
+        return Response(
+            TagSerializer(tag).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TagDetailView(APIView):
-    permission_classes = [permissions.AllowAny]
+    """
+    GET    /api/tags/<slug>/  — tag detail + paginated articles (public)
+    PATCH  /api/tags/<slug>/  — rename tag (Editor and above)
+    DELETE /api/tags/<slug>/  — delete tag (Editor and above)
+
+    DELETE removes the tag and detaches it from all articles via M2M cleanup.
+    Unlike categories, tags have no FK dependency so deletion is always permitted.
+    """
+
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "DELETE"):
+            return [IsAuthenticated(), IsEditorOrAbove()]
+        return [permissions.AllowAny()]
 
     def get(self, request, slug):
         tag = get_object_or_404(Tag, slug=slug)
@@ -265,3 +357,19 @@ class TagDetailView(APIView):
             "previous":     paginator.get_previous_link(),
             "articles":     ArticleListSerializer(page, many=True, context={"request": request}).data,
         })
+
+    def patch(self, request, slug):
+        tag = get_object_or_404(Tag, slug=slug)
+        serializer = TagWriteSerializer(tag, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        tag = serializer.save()
+        return Response(TagSerializer(tag).data)
+
+    def delete(self, request, slug):
+        tag = get_object_or_404(Tag, slug=slug)
+        name = tag.name
+        tag.delete()
+        return Response(
+            {"detail": f"Tag '{name}' has been deleted."},
+            status=status.HTTP_200_OK,
+        )

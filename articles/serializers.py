@@ -32,6 +32,41 @@ class TagSerializer(serializers.ModelSerializer):
         fields = ("id", "name", "slug")
 
 
+class CategoryWriteSerializer(serializers.ModelSerializer):
+    """
+    Validated input for POST /api/categories/ and PATCH /api/categories/<slug>/.
+    Slug is auto-generated from name on creation and never overwritten.
+    """
+
+    class Meta:
+        model  = Category
+        fields = ("name", "description", "og_image_url", "section")
+
+    def validate_name(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Category name cannot be empty.")
+        return value
+
+
+class TagWriteSerializer(serializers.ModelSerializer):
+    """
+    Validated input for POST /api/tags/ and PATCH /api/tags/<slug>/.
+    Name is normalised to lowercase by the model on save.
+    Slug is auto-generated from name on creation and never overwritten.
+    """
+
+    class Meta:
+        model  = Tag
+        fields = ("name",)
+
+    def validate_name(self, value: str) -> str:
+        value = value.strip().lower()
+        if not value:
+            raise serializers.ValidationError("Tag name cannot be empty.")
+        return value
+
+
 # ---------------------------------------------------------------------------
 # Article — read
 # ---------------------------------------------------------------------------
@@ -85,13 +120,18 @@ class ArticleListSerializer(serializers.ModelSerializer):
 
 class ArticleDetailSerializer(ArticleListSerializer):
     """
-    Full article payload — adds body and all SEO/OG fields.
+    Full article payload — adds body, all SEO/OG fields, and contextual
+    article lists (related, latest, more from author).
     Used by /api/articles/<slug>/.
     """
 
     seo_title         = serializers.ReadOnlyField()
     seo_description   = serializers.ReadOnlyField()
     resolved_og_image = serializers.ReadOnlyField()
+
+    related_articles = serializers.SerializerMethodField()
+    latest_articles  = serializers.SerializerMethodField()
+    more_from_author = serializers.SerializerMethodField()
 
     class Meta(ArticleListSerializer.Meta):
         fields = ArticleListSerializer.Meta.fields + (
@@ -106,7 +146,63 @@ class ArticleDetailSerializer(ArticleListSerializer):
             "seo_description",
             "resolved_og_image",
             "updated_at",
+            "related_articles",
+            "latest_articles",
+            "more_from_author",
         )
+
+    def get_related_articles(self, obj: "Article") -> list:
+        """
+        Articles sharing the same category or at least one tag.
+        Falls back to an empty list if the article has neither.
+        """
+        from django.db.models import Q
+
+        # Use the prefetched tag cache — avoids an extra query.
+        tag_ids = [t.id for t in obj.tags.all()]
+
+        conditions = Q()
+        if obj.category_id:
+            conditions |= Q(category_id=obj.category_id)
+        if tag_ids:
+            conditions |= Q(tags__in=tag_ids)
+
+        if not conditions:
+            return []
+
+        qs = (
+            Article.objects
+            .published()
+            .with_related()
+            .filter(conditions)
+            .exclude(pk=obj.pk)
+            .distinct()
+            .order_by("-published_at")[:5]
+        )
+        return ArticleListSerializer(qs, many=True, context=self.context).data
+
+    def get_latest_articles(self, obj: "Article") -> list:
+        """Five most recently published articles, excluding the current one."""
+        qs = (
+            Article.objects
+            .published()
+            .with_related()
+            .exclude(pk=obj.pk)
+            .order_by("-published_at")[:5]
+        )
+        return ArticleListSerializer(qs, many=True, context=self.context).data
+
+    def get_more_from_author(self, obj: "Article") -> list:
+        """Four most recent published articles by the same author."""
+        qs = (
+            Article.objects
+            .published()
+            .with_related()
+            .filter(author_id=obj.author_id)
+            .exclude(pk=obj.pk)
+            .order_by("-published_at")[:4]
+        )
+        return ArticleListSerializer(qs, many=True, context=self.context).data
 
 
 class SectionHeroSerializer(ArticleListSerializer):

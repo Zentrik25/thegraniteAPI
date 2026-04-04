@@ -658,3 +658,265 @@ class ArticlePermissionConsistencyTests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertIn("results", r.data)
         self.assertIn("count", r.data)
+
+
+# ---------------------------------------------------------------------------
+# Category CRUD
+# ---------------------------------------------------------------------------
+
+class CategoryCRUDTests(APITestCase):
+    """
+    POST   /api/categories/           — create (Editor+)
+    PATCH  /api/categories/<slug>/    — update (Editor+)
+    DELETE /api/categories/<slug>/    — delete (Editor+, blocked if articles exist)
+    """
+
+    def setUp(self):
+        self.editor      = make_user("ed",     role="editor")
+        self.author      = make_user("author", role="author")
+        self.category    = Category.objects.create(name="Politics")
+
+    # ── create ──────────────────────────────────────────────────────────
+
+    def test_editor_can_create_category(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/categories/", {"name": "Business"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r.data["name"], "Business")
+        self.assertTrue(Category.objects.filter(slug="business").exists())
+
+    def test_create_returns_slug_and_id(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/categories/", {"name": "Technology"}, format="json")
+        self.assertIn("slug", r.data)
+        self.assertIn("id",   r.data)
+
+    def test_author_cannot_create_category(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.post("/api/categories/", {"name": "Should Fail"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_create_category(self):
+        r = self.client.post("/api/categories/", {"name": "Should Fail"}, format="json")
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_create_empty_name_rejected(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/categories/", {"name": "   "}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_duplicate_name_rejected(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/categories/", {"name": "Politics"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # ── update ──────────────────────────────────────────────────────────
+
+    def test_editor_can_patch_category(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch(
+            f"/api/categories/{self.category.slug}/",
+            {"description": "Political news and analysis."},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.category.refresh_from_db()
+        self.assertEqual(self.category.description, "Political news and analysis.")
+
+    def test_patch_does_not_change_slug(self):
+        """Renaming a category must not change the slug — live URLs must not break."""
+        original_slug = self.category.slug
+        self.client.force_authenticate(self.editor)
+        self.client.patch(
+            f"/api/categories/{self.category.slug}/",
+            {"name": "Renamed Politics"},
+            format="json",
+        )
+        self.category.refresh_from_db()
+        self.assertEqual(self.category.slug, original_slug)
+
+    def test_author_cannot_patch_category(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.patch(
+            f"/api/categories/{self.category.slug}/",
+            {"description": "Nope"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_patch_nonexistent_category_returns_404(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch("/api/categories/no-such-slug/", {"name": "X"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ── delete ──────────────────────────────────────────────────────────
+
+    def test_editor_can_delete_empty_category(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.delete(f"/api/categories/{self.category.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertFalse(Category.objects.filter(slug=self.category.slug).exists())
+
+    def test_delete_blocked_when_articles_exist(self):
+        author = make_user("writer", role="author")
+        make_published(author, title="Blocked Article", category=self.category)
+        self.client.force_authenticate(self.editor)
+        r = self.client.delete(f"/api/categories/{self.category.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", r.data)
+        # Category must still exist
+        self.assertTrue(Category.objects.filter(slug=self.category.slug).exists())
+
+    def test_author_cannot_delete_category(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.delete(f"/api/categories/{self.category.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_delete_category(self):
+        r = self.client.delete(f"/api/categories/{self.category.slug}/")
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_delete_nonexistent_category_returns_404(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.delete("/api/categories/no-such-slug/")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ── list still works after conversion ───────────────────────────────
+
+    def test_public_list_returns_all_categories(self):
+        Category.objects.create(name="Sport")
+        r = self.client.get("/api/categories/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        names = [c["name"] for c in r.data]
+        self.assertIn("Politics", names)
+        self.assertIn("Sport",    names)
+
+
+# ---------------------------------------------------------------------------
+# Tag CRUD
+# ---------------------------------------------------------------------------
+
+class TagCRUDTests(APITestCase):
+    """
+    POST   /api/tags/           — create (Editor+)
+    PATCH  /api/tags/<slug>/    — rename (Editor+)
+    DELETE /api/tags/<slug>/    — delete (Editor+, always permitted)
+    """
+
+    def setUp(self):
+        self.editor = make_user("ed2",     role="editor")
+        self.author = make_user("auth2",   role="author")
+        self.tag    = Tag.objects.create(name="harare")
+
+    # ── create ──────────────────────────────────────────────────────────
+
+    def test_editor_can_create_tag(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/tags/", {"name": "Zimbabwe"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        # Tag model normalises to lowercase
+        self.assertEqual(r.data["name"], "zimbabwe")
+
+    def test_create_tag_normalises_to_lowercase(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/tags/", {"name": "BULAWAYO"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r.data["name"], "bulawayo")
+
+    def test_author_cannot_create_tag(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.post("/api/tags/", {"name": "nope"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_create_tag(self):
+        r = self.client.post("/api/tags/", {"name": "nope"}, format="json")
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_create_empty_name_rejected(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/tags/", {"name": "   "}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_duplicate_name_rejected(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.post("/api/tags/", {"name": "harare"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # ── update ──────────────────────────────────────────────────────────
+
+    def test_editor_can_rename_tag(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch(
+            f"/api/tags/{self.tag.slug}/",
+            {"name": "harare city"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["name"], "harare city")
+
+    def test_rename_normalises_to_lowercase(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch(
+            f"/api/tags/{self.tag.slug}/",
+            {"name": "HARARE CENTRAL"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["name"], "harare central")
+
+    def test_author_cannot_rename_tag(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.patch(
+            f"/api/tags/{self.tag.slug}/",
+            {"name": "nope"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_patch_nonexistent_tag_returns_404(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.patch("/api/tags/no-such-slug/", {"name": "x"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ── delete ──────────────────────────────────────────────────────────
+
+    def test_editor_can_delete_tag(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.delete(f"/api/tags/{self.tag.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertFalse(Tag.objects.filter(slug=self.tag.slug).exists())
+
+    def test_delete_tag_detaches_from_articles(self):
+        """Deleting a tag must not delete the articles — only the M2M links are removed."""
+        author  = make_user("wrt2", role="author")
+        article = make_published(author, title="Tagged Article")
+        article.tags.add(self.tag)
+        self.client.force_authenticate(self.editor)
+        self.client.delete(f"/api/tags/{self.tag.slug}/")
+        article.refresh_from_db()
+        self.assertTrue(Article.objects.filter(pk=article.pk).exists())
+        self.assertFalse(article.tags.filter(slug=self.tag.slug).exists())
+
+    def test_author_cannot_delete_tag(self):
+        self.client.force_authenticate(self.author)
+        r = self.client.delete(f"/api/tags/{self.tag.slug}/")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_delete_tag(self):
+        r = self.client.delete(f"/api/tags/{self.tag.slug}/")
+        self.assertIn(r.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_delete_nonexistent_tag_returns_404(self):
+        self.client.force_authenticate(self.editor)
+        r = self.client.delete("/api/tags/no-such-slug/")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ── list still works after conversion ───────────────────────────────
+
+    def test_public_list_returns_all_tags(self):
+        Tag.objects.create(name="bulawayo")
+        r = self.client.get("/api/tags/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        names = [t["name"] for t in r.data]
+        self.assertIn("harare",   names)
+        self.assertIn("bulawayo", names)

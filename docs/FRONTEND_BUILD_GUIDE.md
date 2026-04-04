@@ -2,12 +2,138 @@
 
 > **Status:** API backend is complete. This document is the implementation blueprint for the Next.js frontend.
 >
-> **Backend base URL (local):** `http://127.0.0.1:8000`
+> **Backend base URL (use this):** `https://api.thegranite.co.zw`
 > **Frontend base URL (local):** `http://localhost:3000`
 > **API prefix:** `/api/v1/`
-> **Live Swagger docs:** `http://127.0.0.1:8000/api/docs/`
+> **Live Swagger docs:** `https://api.thegranite.co.zw/api/docs/`
+> **Live OpenAPI schema:** `https://api.thegranite.co.zw/api/schema/`
 
 ---
+
+## Backend Endpoints (Routes)
+
+Base: `https://api.thegranite.co.zw`
+
+### Non-API (public)
+- `/health/`
+- `/rss/`
+- `/rss/<category_slug>/`
+- `/sitemap.xml`
+- `/news-sitemap.xml`
+- `/admin/`
+- `/api/schema/`
+- `/api/docs/`
+
+### API (v1)
+- `/api/v1/` (API root/index)
+
+**Auth (staff JWT + profile)**
+- `/api/v1/auth/token/`
+- `/api/v1/auth/token/refresh/`
+- `/api/v1/auth/token/blacklist/`
+- `/api/v1/auth/me/`
+- `/api/v1/auth/change-password/`
+
+**Articles / Categories / Tags**
+- `/api/v1/articles/breaking/`
+- `/api/v1/articles/top-stories/`
+- `/api/v1/articles/featured/`
+- `/api/v1/articles/`
+- `/api/v1/articles/<slug>/`
+- `/api/v1/categories/`
+- `/api/v1/categories/<slug>/`
+- `/api/v1/tags/`
+- `/api/v1/tags/<slug>/`
+
+**Public authors + staff management**
+- `/api/v1/users/`
+- `/api/v1/users/<slug>/`
+- `/api/v1/staff/`
+- `/api/v1/staff/<pk>/`
+
+**Analytics**
+- `/api/v1/analytics/articles/<slug>/view/`
+- `/api/v1/analytics/trending/`
+- `/api/v1/analytics/articles/<slug>/stats/`
+
+**Comments**
+- `/api/v1/articles/<slug>/comments/`
+- `/api/v1/moderation/comments/`
+- `/api/v1/moderation/comments/<pk>/`
+
+**Newsletter**
+- `/api/v1/newsletter/subscribe/`
+- `/api/v1/newsletter/confirm/`
+- `/api/v1/newsletter/unsubscribe/`
+- `/api/v1/newsletter/subscribers/`
+
+**Media**
+- `/api/v1/media/`
+- `/api/v1/media/<pk>/`
+
+**Search**
+- `/api/v1/search/`
+
+**Sections**
+- `/api/v1/sections/`
+- `/api/v1/sections/<slug>/`
+- `/api/v1/sections/<slug>/articles/`
+
+**Redirects**
+- `/api/v1/redirects/`
+- `/api/v1/redirects/<pk>/`
+
+**Audit**
+- `/api/v1/audit/`
+- `/api/v1/audit/<content_type_name>/<object_id>/`
+
+**Reader accounts**
+- `/api/v1/accounts/register/`
+- `/api/v1/accounts/verify-email/?token=...`
+- `/api/v1/accounts/login/`
+- `/api/v1/accounts/logout/`
+- `/api/v1/accounts/token/refresh/`
+- `/api/v1/accounts/me/`
+- `/api/v1/accounts/change-password/`
+- `/api/v1/accounts/forgot-password/`
+- `/api/v1/accounts/reset-password/`
+- `/api/v1/accounts/bookmarks/`
+- `/api/v1/accounts/bookmarks/<slug>/`
+- `/api/v1/accounts/history/`
+
+**Advertising**
+- `/api/v1/ads/zones/`
+- `/api/v1/ads/zones/<slug>/`
+- `/api/v1/ads/<campaign_id>/impression/`
+- `/api/v1/ads/<campaign_id>/click/`
+- `/api/v1/ads/campaigns/`
+- `/api/v1/ads/campaigns/<pk>/`
+- `/api/v1/ads/advertisers/`
+- `/api/v1/ads/report/<campaign_id>/`
+
+**Push notifications**
+- `/api/v1/notifications/vapid-public-key/`
+- `/api/v1/notifications/subscribe/`
+- `/api/v1/notifications/unsubscribe/`
+- `/api/v1/notifications/history/`
+- `/api/v1/notifications/test/`
+
+**Subscriptions**
+- `/api/v1/subscriptions/plans/`
+- `/api/v1/subscriptions/my-subscription/`
+- `/api/v1/subscriptions/subscribe/`
+- `/api/v1/subscriptions/cancel/`
+- `/api/v1/subscriptions/payments/`
+- `/api/v1/subscriptions/paynow-callback/`
+- `/api/v1/subscriptions/paynow-poll/<payment_id>/`
+- `/api/v1/subscriptions/all/`
+- `/api/v1/subscriptions/revenue/`
+
+### Legacy compatibility (articles only)
+- `/api/articles/…` (same as `/api/v1/articles/…`)
+
+### Legacy auth (staff)
+- `/api/auth/login/` (same handler as `/api/v1/auth/token/`)
 
 ## Table of Contents
 
@@ -53,13 +179,13 @@ Create `.env.local` at the project root:
 
 ```bash
 # Backend API (server-side fetches — never exposed to browser)
-API_BASE_URL=http://127.0.0.1:8000
+API_BASE_URL=https://api.thegranite.co.zw
 
 # Frontend public URL
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
 # Backend API (browser-side calls only: analytics, auth refresh, ad tracking)
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_BASE_URL=https://api.thegranite.co.zw
 
 # Cookie secrets (generate with: openssl rand -hex 32)
 READER_SESSION_SECRET=replace_this_with_32_byte_hex
@@ -69,6 +195,7 @@ STAFF_SESSION_SECRET=replace_this_with_32_byte_hex
 Rules:
 - Use `API_BASE_URL` (no `NEXT_PUBLIC_`) for all server component fetches.
 - Use `NEXT_PUBLIC_API_BASE_URL` only for browser-side calls (analytics, comments, auth).
+- If you need a local backend temporarily, override both API vars with `http://127.0.0.1:8000`.
 - Never expose `READER_SESSION_SECRET` or `STAFF_SESSION_SECRET` to the browser.
 
 ---
@@ -125,6 +252,8 @@ src/
         page.tsx
       verify-email/
         page.tsx
+      reset-password/
+        page.tsx
       account/
         page.tsx                   # Profile
         bookmarks/
@@ -155,6 +284,18 @@ src/
           page.tsx
         subscriptions/
           page.tsx
+        sections/
+          page.tsx
+          [slug]/
+            page.tsx
+        categories/
+          page.tsx
+          [slug]/
+            page.tsx
+        tags/
+          page.tsx
+          [slug]/
+            page.tsx
         staff/
           page.tsx
     api/                           # Next.js Route Handlers (server-side only)
@@ -348,10 +489,21 @@ export type Category = {
   og_image_url: string;
 };
 
+export type CategoryWriteInput = {
+  name: string;
+  description?: string;
+  og_image_url?: string;
+  section?: number | null;
+};
+
 export type Tag = {
   id: number;
   name: string;
   slug: string;
+};
+
+export type TagWriteInput = {
+  name: string;
 };
 
 export type Section = {
@@ -359,7 +511,55 @@ export type Section = {
   name: string;
   slug: string;
   description: string;
+  og_image_url: string;
+  display_order: number;
   is_primary: boolean;
+  article_count: number;
+  category_count: number;
+};
+
+export type SectionWriteInput = {
+  name: string;
+  description?: string;
+  og_image_url?: string;
+  display_order?: number;
+  is_active?: boolean;
+  is_primary?: boolean;
+  featured_article?: number | null;
+};
+
+export type SectionListResponse = {
+  status: "ok";
+  count: number;
+  results: Section[];
+};
+
+export type SectionDetail = Section & {
+  hero_article: ArticleListItem | null;
+  categories: Category[];
+  articles: ArticleListItem[];
+};
+
+export type CategoryDetailResponse = {
+  category: Category;
+  count: number;
+  total_pages: number;
+  current_page: number;
+  page_size: number;
+  next: string | null;
+  previous: string | null;
+  articles: ArticleListItem[];
+};
+
+export type TagDetailResponse = {
+  tag: Tag;
+  count: number;
+  total_pages: number;
+  current_page: number;
+  page_size: number;
+  next: string | null;
+  previous: string | null;
+  articles: ArticleListItem[];
 };
 
 // --- Articles ---
@@ -369,11 +569,12 @@ export type ArticleListItem = {
   title: string;
   slug: string;
   excerpt: string;
-  status: "draft" | "review" | "published" | "archived";
+  status: "Draft" | "In Review" | "Published" | "Archived";
   author_name: string;
   category: Category | null;
   tags: Tag[];
   is_breaking: boolean;
+  is_premium: boolean;
   top_story_rank: number | null;
   is_top_story: boolean;
   is_featured: boolean;
@@ -399,6 +600,9 @@ export type ArticleDetail = ArticleListItem & {
   seo_description: string;
   resolved_og_image: string;
   updated_at: string;
+  related_articles: ArticleListItem[];
+  latest_articles: ArticleListItem[];
+  more_from_author: ArticleListItem[];
 };
 
 export type TopStorySlot = {
@@ -420,6 +624,17 @@ export type AuthorProfile = {
   linkedin_url: string;
   email_public: string;
   article_count: number;
+};
+
+export type AuthorDetailResponse = {
+  user: AuthorProfile;
+  count: number;
+  total_pages: number;
+  current_page: number;
+  page_size: number;
+  next: string | null;
+  previous: string | null;
+  articles: ArticleListItem[];
 };
 
 // --- Staff User ---
@@ -482,19 +697,41 @@ export type SubscriptionPlan = {
   article_access_label: string;
 };
 
+export type SearchResult = {
+  rank: number;
+  article: ArticleListItem;
+};
+
+export type SearchResponse = {
+  query: string;
+  count: number;
+  total_pages: number;
+  current_page: number;
+  next: string | null;
+  previous: string | null;
+  results: SearchResult[];
+};
+
 // --- Advertising ---
 
 export type AdZone = {
+  id: number;
   slug: string;
   name: string;
+  zone_type: string;
+  description: string;
+  width: number;
+  height: number;
+  max_ads: number;
   campaigns: AdCampaign[];
 };
 
 export type AdCampaign = {
-  id: number;
+  id: string;
   name: string;
+  advertiser_name: string;
   creative_url: string;
-  creative_type: string;
+  alt_text: string;
   impression_tracking_url: string;
   click_tracking_url: string;
 };
@@ -512,7 +749,11 @@ export type AdCampaign = {
 | Token source | JWT pair | JWT pair |
 | Cookie name | `granite_staff_session` | `granite_reader_session` |
 | Stored in | `httpOnly` cookie (via Route Handler) | `httpOnly` cookie (via Route Handler) |
-| Token expiry | Access: 60 min / Refresh: 7 days | Access: 60 min / Refresh: 7 days |
+| Refresh endpoint | `POST /api/v1/auth/token/refresh/` | `POST /api/v1/accounts/token/refresh/` |
+| Profile endpoint | `GET /api/v1/auth/me/` | `GET /api/v1/accounts/me/` |
+| Token expiry | Access: 60 min / Refresh: 7 days | Access: 60 min / Refresh: 30 days |
+
+Reader JWTs are separate from staff JWTs. Do not try to reuse staff cookies or refresh tokens against reader endpoints, or the other way around.
 
 ### Middleware (`src/middleware.ts`)
 
@@ -602,10 +843,10 @@ import type { ArticleListItem, TopStorySlot } from "@/lib/api/types";
 
 export default async function HomePage() {
   const [breaking, topStories, featured, latest] = await Promise.all([
-    getPublic<ArticleListItem[]>("/api/v1/articles/breaking/"),
+    getPublic<PaginatedResponse<ArticleListItem>>("/api/v1/articles/breaking/"),
     getPublic<TopStorySlot[]>("/api/v1/articles/top-stories/"),
-    getPublic<ArticleListItem[]>("/api/v1/articles/featured/"),
-    getPublic<{ results: ArticleListItem[] }>("/api/v1/articles/"),
+    getPublic<PaginatedResponse<ArticleListItem>>("/api/v1/articles/featured/"),
+    getPublic<PaginatedResponse<ArticleListItem>>("/api/v1/articles/"),
   ]);
 
   return (
@@ -679,27 +920,27 @@ export function AnalyticsTracker({ slug }: { slug: string }) {
 ### 8.3 Category Page (`src/app/(site)/categories/[slug]/page.tsx`)
 
 ```ts
-const data = await getPublic<{
-  category: Category;
-  articles: ArticleListItem[];
-}>(`/api/v1/categories/${params.slug}/`);
+const data = await getPublic<CategoryDetailResponse>(
+  `/api/v1/categories/${params.slug}/?page=${page}`
+);
 ```
 
-Note: not paginated — render full array.
+Note: category detail is paginated and the article list lives under `data.articles`, not `data.results`.
 
 ### 8.4 Tag Page (`src/app/(site)/tags/[slug]/page.tsx`)
 
 ```ts
-const data = await getPublic<{
-  tag: Tag;
-  articles: ArticleListItem[];
-}>(`/api/v1/tags/${params.slug}/`);
+const data = await getPublic<TagDetailResponse>(
+  `/api/v1/tags/${params.slug}/?page=${page}`
+);
 ```
+
+Note: tag detail is paginated and the article list lives under `data.articles`, not `data.results`.
 
 ### 8.5 Section Page (`src/app/(site)/sections/[slug]/page.tsx`)
 
 ```ts
-const section = await getPublic(`/api/v1/sections/${params.slug}/`);
+const section = await getPublic<SectionDetail>(`/api/v1/sections/${params.slug}/`);
 // section includes: hero_article, categories, latest 20 articles
 // paginated articles via /api/v1/sections/${slug}/articles/?page=N
 ```
@@ -708,25 +949,25 @@ const section = await getPublic(`/api/v1/sections/${params.slug}/`);
 
 ```ts
 // /authors
-const authors = await getPublic<AuthorProfile[]>("/api/v1/users/");
+const authors = await getPublic<PaginatedResponse<AuthorProfile>>("/api/v1/users/");
 
 // /authors/[slug]
-const data = await getPublic<{ user: AuthorProfile; articles: ArticleListItem[] }>(
+const data = await getPublic<AuthorDetailResponse>(
   `/api/v1/users/${params.slug}/`
 );
 ```
 
-API path is `/api/v1/users/` — frontend route is `/authors/`.
+API path is `/api/v1/users/` — frontend route is `/authors/`. The author detail response is paginated and uses `articles`, not `results`.
 
 ### 8.7 Search (`src/app/(site)/search/page.tsx`)
 
 ```ts
 // Server component — receives ?q= from searchParams
 const query = searchParams.q ?? "";
-const data = await getPublic<PaginatedResponse<SearchResult>>(
+const data = await getPublic<SearchResponse>(
   `/api/v1/search/?q=${encodeURIComponent(query)}&page=${page}`
 );
-// SearchResult.headline contains <mark> tags — render safely or strip
+// Search results are nested under result.article
 ```
 
 Limits: min 2 chars, max 200 chars, page_size max 50.
@@ -772,6 +1013,7 @@ POST to your Route Handler `/api/reader/login`, which proxies to `/api/v1/accoun
 ```
 
 - Sets `granite_reader_session` httpOnly cookie.
+- Backend response shape is `{ access, refresh, reader }`.
 - Redirect to `/account`.
 
 ### 9.4 Profile
