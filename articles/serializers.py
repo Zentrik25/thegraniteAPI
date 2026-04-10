@@ -290,9 +290,15 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         tags = validated_data.pop("tags", None)
+        update_fields = []
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        instance.save()
+            update_fields.append(attr)
+        # Always include updated_at (auto_now); never include view_count or
+        # search_vector — those are managed by analytics signals and the search
+        # index rebuild command respectively.
+        update_fields.append("updated_at")
+        instance.save(update_fields=update_fields)
         if tags is not None:
             instance.tags.set(tags)
         return instance
