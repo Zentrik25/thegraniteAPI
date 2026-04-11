@@ -11,6 +11,7 @@ Taxonomy:
   TagSerializer
 """
 
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from .models import Article, Category, Tag, TOP_STORY_MAX, TOP_STORY_MIN
@@ -267,6 +268,18 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_title(self, value: str) -> str:
+        value = value.strip()
+        # Only check slug uniqueness on creation — updates never regenerate the slug.
+        if self.instance is None:
+            slug = slugify(value)[:240]
+            if Article.objects.filter(slug=slug).exists():
+                raise serializers.ValidationError(
+                    "An article with this title already exists. "
+                    "Use a distinct title so each article has a unique URL."
+                )
+        return value
+
     def validate_og_description(self, value: str) -> str:
         if len(value) > 160:
             raise serializers.ValidationError(
@@ -298,6 +311,12 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
         # search_vector — those are managed by analytics signals and the search
         # index rebuild command respectively.
         update_fields.append("updated_at")
+        # Article.save() auto-syncs these boolean flags from their rank fields.
+        # Include them in update_fields so the sync is persisted when ranks change.
+        if "top_story_rank" in update_fields:
+            update_fields.append("is_top_story")
+        if "featured_rank" in update_fields:
+            update_fields.append("is_featured")
         instance.save(update_fields=update_fields)
         if tags is not None:
             instance.tags.set(tags)

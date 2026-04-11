@@ -3,15 +3,12 @@ models.py — Core content models for The Granite Post CMS.
 
 Designed for editorial workflow at a news publication:
   - Article lifecycle: draft → review → published → archived
-  - Slug collision safety via counter loop with UUID fallback
   - Auto-stamp published_at on first publish; preserve on archive
   - SEO and Open Graph metadata baked in at the model layer
   - Composite DB indexes tuned for homepage, author, and category queries
   - Breaking news flag
   - 6-slot top story grid, each slot enforced unique at DB level
 """
-
-import uuid
 
 from django.conf import settings
 from django.contrib.postgres.indexes import GinIndex
@@ -66,26 +63,24 @@ TOP_STORY_MAX = 6
 
 
 # ---------------------------------------------------------------------------
-# Slug helper
+# Slug helper (taxonomy only — Article slugs are validated by the serializer)
 # ---------------------------------------------------------------------------
 
 def _unique_slug(model_class, base_text: str, fallback: str, max_base: int, current_pk=None) -> str:
     """
-    Generate a URL-safe slug that is unique within *model_class*.
-
-    Strategy:
-      1. Slugify and truncate to *max_base* characters.
-      2. If no collisions, return as-is.
-      3. On collision, append an incrementing counter up to 99 attempts.
-      4. Beyond 99 collisions, append a 6-char UUID fragment — guaranteed unique.
+    Generate a unique slug for Category and Tag.
+    Appends a counter on collision so taxonomy items never hard-fail.
+    NOT used for Article — article slugs must be unique by title; the
+    ArticleWriteSerializer validates this before save.
     """
+    import uuid as _uuid
     base_slug = slugify(base_text)[:max_base] or fallback
     slug = base_slug
     counter = 1
 
     while model_class.objects.filter(slug=slug).exclude(pk=current_pk).exists():
         if counter > 99:
-            slug = f"{base_slug[:max_base - 7]}-{uuid.uuid4().hex[:6]}"
+            slug = f"{base_slug[:max_base - 7]}-{_uuid.uuid4().hex[:6]}"
             break
         slug = f"{base_slug}-{counter}"
         counter += 1
@@ -436,8 +431,10 @@ class Article(TimeStampedModel):
     def save(self, *args, **kwargs) -> None:
         # 1. Auto-generate slug on first creation only.
         #    Never regenerate on update — that would break live URLs.
+        #    Uniqueness is enforced by the DB constraint + validated by
+        #    ArticleWriteSerializer before save ever runs.
         if not self.slug:
-            self.slug = _unique_slug(Article, self.title, "article", 240, self.pk)
+            self.slug = slugify(self.title)[:240] or "article"
 
         # 1.1 Defensive normalisation for legacy callers/tests that may still
         #     pass None for the paywall flag.
