@@ -342,6 +342,10 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
             update_fields.append("is_top_story")
         if "featured_rank" in update_fields:
             update_fields.append("is_featured")
+        # Article.save() stamps published_at when status transitions to
+        # "published". Include it in update_fields so the value reaches the DB.
+        if "status" in update_fields:
+            update_fields.append("published_at")
         instance.save(update_fields=update_fields)
         if tags is not None:
             instance.tags.set(tags)
