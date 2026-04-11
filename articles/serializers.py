@@ -229,8 +229,19 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
     Validated input for POST /api/articles/ and PATCH /api/articles/<slug>/.
 
     - author is injected from request.user in the view.
-    - slug and published_at are read-only; managed by the model.
+    - slug is optional on create (auto-generated from title); writable on update.
+    - published_at is read-only; managed by the model.
     """
+
+    slug = serializers.SlugField(
+        max_length=280,
+        required=False,
+        allow_blank=False,
+        help_text=(
+            "URL slug. Optional on create — auto-generated from title if omitted. "
+            "Can be overridden here. Must be unique across all articles."
+        ),
+    )
 
     tags = serializers.PrimaryKeyRelatedField(
         queryset=Tag.objects.all(),
@@ -242,6 +253,7 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
         model  = Article
         fields = (
             "title",
+            "slug",
             "excerpt",
             "body",
             "status",
@@ -259,7 +271,18 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
             "og_image_url",
             "canonical_url",
         )
-        read_only_fields = ("slug", "published_at")
+        read_only_fields = ("published_at",)
+
+    def validate_slug(self, value: str) -> str:
+        value = value.strip()
+        qs = Article.objects.filter(slug=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                "This slug is already in use by another article."
+            )
+        return value
 
     def validate_top_story_rank(self, value):
         if value is not None and not (TOP_STORY_MIN <= value <= TOP_STORY_MAX):
@@ -270,8 +293,10 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
 
     def validate_title(self, value: str) -> str:
         value = value.strip()
-        # Only check slug uniqueness on creation — updates never regenerate the slug.
-        if self.instance is None:
+        # Only auto-check slug collision on creation when no explicit slug is
+        # provided. If the caller supplies their own slug, validate_slug handles
+        # the uniqueness check for that slug instead.
+        if self.instance is None and not self.initial_data.get("slug"):
             slug = slugify(value)[:240]
             if Article.objects.filter(slug=slug).exists():
                 raise serializers.ValidationError(
