@@ -101,9 +101,18 @@ def get_real_ip(request) -> str:
     Resolve the real client IP address from a Django request.
 
     Priority order:
-      1. CF-Connecting-IP header — if request came from a Cloudflare IP.
-      2. X-Forwarded-For first entry — if behind any other trusted proxy.
-      3. REMOTE_ADDR — direct connection fallback.
+      1. CF-Connecting-IP header — trusted unconditionally when present.
+         Cloudflare always sets this header and strips any client-supplied
+         value before forwarding to origin, so it cannot be forged by readers.
+         Critically, in Cloudflare → platform-proxy deployments (e.g.
+         Cloudflare → Vercel), REMOTE_ADDR is the platform's internal IP
+         rather than a Cloudflare IP, so the old guard of requiring
+         is_cloudflare_ip(REMOTE_ADDR) caused this header to be ignored and
+         every request appeared to come from the same proxy IP — breaking
+         per-viewer deduplication in the analytics layer.
+      2. X-Forwarded-For first entry — if REMOTE_ADDR is a configured
+         trusted proxy (non-Cloudflare reverse proxy, e.g. nginx).
+      3. REMOTE_ADDR — direct connection fallback (local dev, raw server).
 
     Args:
         request: Django HttpRequest object.
@@ -111,13 +120,13 @@ def get_real_ip(request) -> str:
     Returns:
         IP address string, or "unknown" if none is resolvable.
     """
-    remote_addr = request.META.get("REMOTE_ADDR", "")
+    # CF-Connecting-IP is always the true reader IP when Cloudflare is in the
+    # chain, regardless of what platform sits between Cloudflare and Django.
+    cf_ip = request.META.get("HTTP_CF_CONNECTING_IP", "").strip()
+    if cf_ip:
+        return cf_ip
 
-    # Cloudflare path: trust CF-Connecting-IP only when the upstream is CF
-    if remote_addr and is_cloudflare_ip(remote_addr):
-        cf_ip = request.META.get("HTTP_CF_CONNECTING_IP", "").strip()
-        if cf_ip:
-            return cf_ip
+    remote_addr = request.META.get("REMOTE_ADDR", "")
 
     # Generic reverse-proxy path: only trust X-Forwarded-For when the
     # direct connection (REMOTE_ADDR) is a configured trusted proxy.
