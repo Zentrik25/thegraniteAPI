@@ -243,6 +243,12 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
         ),
     )
 
+    body = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Full article body. Not required for drafts.",
+    )
+
     tags = serializers.PrimaryKeyRelatedField(
         queryset=Tag.objects.all(),
         many=True,
@@ -313,11 +319,25 @@ class ArticleWriteSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        # A category is required before an article can go live.
-        if attrs.get("status") == "published" and not attrs.get("category"):
-            raise serializers.ValidationError(
-                {"category": "A category is required before publishing."}
-            )
+        status = attrs.get("status") or (self.instance.status if self.instance else None)
+        going_live = status == "published"
+
+        errors = {}
+
+        if going_live:
+            # Category required to publish
+            category = attrs.get("category") or (self.instance.category if self.instance else None)
+            if not category:
+                errors["category"] = "A category is required before publishing."
+
+            # Body required to publish
+            body = attrs.get("body") if "body" in attrs else (self.instance.body if self.instance else None)
+            if not body or not body.strip():
+                errors["body"] = "Article body is required before publishing."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return attrs
 
     def create(self, validated_data):

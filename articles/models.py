@@ -193,6 +193,7 @@ class Article(TimeStampedModel):
         help_text="One or two sentence summary used in listings and meta description fallback.",
     )
     body = models.TextField(
+        blank=True,
         help_text="Full article body. Supports HTML or Markdown depending on your renderer.",
     )
 

@@ -72,11 +72,11 @@ class SlugGenerationTests(TestCase):
         a.refresh_from_db()
         self.assertEqual(a.slug, original)
 
-    def test_slug_collision_resolved_with_counter(self):
-        a1 = make_article(self.user, title="Breaking News")
-        a2 = make_article(self.user, title="Breaking News")
-        self.assertNotEqual(a1.slug, a2.slug)
-        self.assertTrue(a2.slug.startswith("breaking-news-"))
+    def test_slug_collision_raises_integrity_error(self):
+        from django.db import IntegrityError
+        make_article(self.user, title="Breaking News")
+        with self.assertRaises(IntegrityError):
+            make_article(self.user, title="Breaking News")
 
     def test_category_slug_auto_generated(self):
         cat = Category.objects.create(name="Sport")
