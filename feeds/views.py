@@ -88,7 +88,7 @@ class CategoryFeed(Feed):
         return f"The Granite Post — {obj.name}"
 
     def link(self, obj):
-        return f"/category/{obj.slug}/"
+        return f"/categories/{obj.slug}/"
 
     def description(self, obj):
         return obj.description or f"Latest {obj.name} news from The Granite Post."

@@ -486,6 +486,10 @@ FRONTEND_URL = os.environ.get(
     "http://localhost:3000" if DEBUG else SITE_URL,
 ).rstrip("/")
 
+# Next.js ISR revalidation webhook
+NEXTJS_URL = os.environ.get("NEXTJS_URL", FRONTEND_URL).rstrip("/")
+NEXTJS_REVALIDATE_SECRET = os.environ.get("NEXTJS_REVALIDATE_SECRET", "")
+
 # Email delivery
 EMAIL_BACKEND = os.environ.get(
     "EMAIL_BACKEND",

@@ -45,6 +45,7 @@ def enforce_unique_top_story_rank(sender, instance, **kwargs):
             count,
             instance.pk or "NEW",
             instance.title,
+            
         )
 
 
@@ -90,6 +91,34 @@ def purge_cloudflare_on_publish(sender, instance, **kwargs) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Cloudflare purge failed for article pk=%s slug=%s: %s",
+            instance.pk,
+            instance.slug,
+            exc,
+        )
+
+
+@receiver(post_save, sender="articles.Article")
+def revalidate_nextjs_on_publish(_sender, instance, **_kwargs) -> None:
+    """
+    Trigger Next.js on-demand ISR revalidation when an article is published.
+
+    The Next.js Data Cache is internal to Vercel and cannot be reached by
+    Cloudflare purge, so Django must call /api/revalidate directly.
+    Silently skips when NEXTJS_URL is not configured (dev/test).
+    """
+    if instance.status != "published":
+        return
+
+    try:
+        from core.nextjs_revalidate import revalidate_article
+        revalidate_article(
+            instance.slug,
+            section_slug=getattr(instance.section, "slug", None),
+            category_slug=getattr(instance.category, "slug", None),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Next.js revalidate failed for article pk=%s slug=%s: %s",
             instance.pk,
             instance.slug,
             exc,

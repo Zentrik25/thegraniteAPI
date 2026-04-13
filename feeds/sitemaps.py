@@ -40,7 +40,7 @@ class CategorySitemap(Sitemap):
         return obj.updated_at
 
     def location(self, obj):
-        return f"/category/{obj.slug}/"
+        return f"/categories/{obj.slug}/"
 
 
 class GoogleNewsSitemap(Sitemap):

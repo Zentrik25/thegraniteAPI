@@ -99,7 +99,8 @@ def purge_article_cache(slug: str) -> bool:
         f"{site_url}/api/v1/articles/breaking/",
         f"{site_url}/sitemap.xml",
         f"{site_url}/news-sitemap.xml",
-        f"{site_url}/rss/latest/",
+        f"{site_url}/feed.xml",
+        f"{site_url}/feed",
     ]
 
     success = _purge(urls=urls)
