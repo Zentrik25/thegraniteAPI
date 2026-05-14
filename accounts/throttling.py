@@ -43,3 +43,27 @@ class ReaderPasswordResetThrottle(SimpleRateThrottle):
     def get_cache_key(self, request, view) -> str:
         ident = self.get_ident(request)
         return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class ReaderVerifyEmailThrottle(SimpleRateThrottle):
+    """10 verification attempts per IP per hour — separate from login."""
+
+    cache = caches["throttle"]
+    scope = "reader_verify_email"
+    rate  = "10/hour"
+
+    def get_cache_key(self, request, view) -> str:
+        ident = self.get_ident(request)
+        return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class ReaderResendVerificationThrottle(SimpleRateThrottle):
+    """5 resend-verification requests per IP per hour — separate from password reset."""
+
+    cache = caches["throttle"]
+    scope = "reader_resend_verification"
+    rate  = "5/hour"
+
+    def get_cache_key(self, request, view) -> str:
+        ident = self.get_ident(request)
+        return self.cache_format % {"scope": self.scope, "ident": ident}

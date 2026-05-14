@@ -12,7 +12,7 @@ for the same reason.
 
 Endpoint map:
   POST   /accounts/register/
-  GET    /accounts/verify-email/?token=
+  POST   /accounts/verify-email/
   POST   /accounts/login/
   POST   /accounts/logout/
   POST   /accounts/token/refresh/
@@ -64,6 +64,8 @@ from .throttling import (
     ReaderLoginThrottle,
     ReaderPasswordResetThrottle,
     ReaderRegisterThrottle,
+    ReaderResendVerificationThrottle,
+    ReaderVerifyEmailThrottle,
 )
 
 logger = logging.getLogger("accounts.views")
@@ -128,7 +130,7 @@ class ResendVerificationView(APIView):
 
     authentication_classes = []
     permission_classes     = [AllowAny]
-    throttle_classes       = [ReaderPasswordResetThrottle]
+    throttle_classes       = [ReaderResendVerificationThrottle]
 
     _RESPONSE = {"detail": "If an unverified account exists for this email, a new code has been sent."}
 
@@ -182,7 +184,7 @@ class VerifyEmailView(APIView):
 
     authentication_classes = []
     permission_classes     = [AllowAny]
-    throttle_classes       = [ReaderLoginThrottle]
+    throttle_classes       = [ReaderVerifyEmailThrottle]
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -191,6 +193,12 @@ class VerifyEmailView(APIView):
         if not email or not code:
             return Response(
                 {"detail": "Email and code are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not code.isdigit() or len(code) != 6:
+            return Response(
+                {"detail": "Invalid or already-used verification code."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

@@ -164,6 +164,11 @@ def send_verification_email(self, reader_id: str) -> None:
             "Failed to send verification email: reader_id=%s email=%s error=%s",
             reader.id, _mask_email(reader.email), exc,
         )
+        # In eager mode (CELERY_TASK_ALWAYS_EAGER=True) retries execute
+        # synchronously with no delay, blocking the HTTP request for
+        # max_retries * EMAIL_TIMEOUT seconds.  Log and return instead.
+        if self.request.is_eager:
+            return
         raise self.retry(exc=exc)
 
     logger.info("Verification email sent: reader_id=%s email=%s", reader.id, _mask_email(reader.email))
@@ -203,6 +208,8 @@ def send_password_reset_email(self, reader_id: str) -> None:
             "Failed to send password reset email: reader_id=%s email=%s error=%s",
             reader.id, _mask_email(reader.email), exc,
         )
+        if self.request.is_eager:
+            return
         raise self.retry(exc=exc)
 
     logger.info("Password reset email sent: reader_id=%s email=%s", reader.id, _mask_email(reader.email))
