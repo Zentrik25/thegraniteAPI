@@ -92,7 +92,14 @@ class RegisterView(APIView):
         reader = serializer.save()
 
         from .tasks import send_verification_email
-        send_verification_email.apply_async(args=[str(reader.id)], queue="slow")
+        try:
+            send_verification_email.apply_async(args=[str(reader.id)], queue="slow")
+        except Exception:
+            # Broker unavailable — account is created; email will need to be resent.
+            logger.error(
+                "Could not queue verification email for reader pk=%s — broker unreachable.",
+                reader.id,
+            )
 
         logger.info(
             "Reader registered: pk=%s username=%s email=%s",
@@ -103,6 +110,55 @@ class RegisterView(APIView):
             ReaderProfileSerializer(reader).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class ResendVerificationView(APIView):
+    """
+    POST /api/v1/accounts/resend-verification/
+
+    Re-queue the verification email for an unverified account.
+    Always returns 202 regardless of whether the email exists — prevents enumeration.
+    Rate limited: 3 requests per IP per hour.
+    """
+
+    authentication_classes = []
+    permission_classes     = [AllowAny]
+    throttle_classes       = [ReaderPasswordResetThrottle]
+
+    _RESPONSE = {"detail": "If an unverified account exists for this email, a new verification link has been sent."}
+
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+
+        if not email:
+            return Response(
+                {"detail": "Email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            reader = ReaderAccount.objects.get(
+                email=email,
+                is_email_verified=False,
+                is_active=True,
+            )
+        except ReaderAccount.DoesNotExist:
+            return Response(self._RESPONSE, status=status.HTTP_202_ACCEPTED)
+
+        from .tasks import send_verification_email
+        try:
+            send_verification_email.apply_async(args=[str(reader.id)], queue="slow")
+        except Exception:
+            logger.error(
+                "Could not queue resend verification email for reader pk=%s — broker unreachable.",
+                reader.id,
+            )
+
+        logger.info(
+            "Verification email resent: pk=%s email=%s", reader.id, _mask_email(reader.email)
+        )
+
+        return Response(self._RESPONSE, status=status.HTTP_202_ACCEPTED)
 
 
 class VerifyEmailView(APIView):

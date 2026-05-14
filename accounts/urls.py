@@ -36,6 +36,7 @@ from .views import (
     ReadingHistoryView,
     ReaderTokenRefreshView,
     RegisterView,
+    ResendVerificationView,
     ResetPasswordView,
     VerifyEmailView,
 )
@@ -44,8 +45,9 @@ app_name = "accounts"
 
 urlpatterns = [
     # -- Registration & email verification ---------------------------------
-    path("accounts/register/",      RegisterView.as_view(),    name="register"),
-    path("accounts/verify-email/",  VerifyEmailView.as_view(), name="verify-email"),
+    path("accounts/register/",             RegisterView.as_view(),           name="register"),
+    path("accounts/verify-email/",         VerifyEmailView.as_view(),        name="verify-email"),
+    path("accounts/resend-verification/",  ResendVerificationView.as_view(), name="resend-verification"),
 
     # -- Authentication ----------------------------------------------------
     path("accounts/login/",          LoginView.as_view(),              name="login"),

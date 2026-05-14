@@ -98,7 +98,7 @@ def purge_cloudflare_on_publish(sender, instance, **kwargs) -> None:
 
 
 @receiver(post_save, sender="articles.Article")
-def revalidate_nextjs_on_publish(_sender, instance, **_kwargs) -> None:
+def revalidate_nextjs_on_publish(sender, instance, **kwargs) -> None:
     """
     Trigger Next.js on-demand ISR revalidation when an article is published.
 

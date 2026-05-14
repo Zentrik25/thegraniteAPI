@@ -490,7 +490,9 @@ FRONTEND_URL = os.environ.get(
 NEXTJS_URL = os.environ.get("NEXTJS_URL", FRONTEND_URL).rstrip("/")
 NEXTJS_REVALIDATE_SECRET = os.environ.get("NEXTJS_REVALIDATE_SECRET", "")
 
-# Email delivery
+# Email delivery — SendGrid SMTP relay in production.
+# Set EMAIL_HOST_PASSWORD to your SendGrid API key (starts with SG.).
+# EMAIL_HOST_USER must be the literal string "apikey" for SendGrid.
 EMAIL_BACKEND = os.environ.get(
     "EMAIL_BACKEND",
     (
@@ -502,13 +504,13 @@ EMAIL_BACKEND = os.environ.get(
     ),
 )
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@thegranite.co.zw")
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "25"))
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST      = os.environ.get("EMAIL_HOST",          "smtp.sendgrid.net" if not DEBUG else "localhost")
+EMAIL_PORT      = int(os.environ.get("EMAIL_PORT",      "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER",     "apikey")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = _env_flag("EMAIL_USE_TLS", default=False)
-EMAIL_USE_SSL = _env_flag("EMAIL_USE_SSL", default=False)
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
+EMAIL_USE_TLS   = _env_flag("EMAIL_USE_TLS",   default=not DEBUG)
+EMAIL_USE_SSL   = _env_flag("EMAIL_USE_SSL",   default=False)
+EMAIL_TIMEOUT   = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 _validate_email_settings(
     production=_PRODUCTION,
     email_host=EMAIL_HOST,
