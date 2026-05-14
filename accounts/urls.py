@@ -6,7 +6,7 @@ All routes are mounted under /api/v1/ in the project urls.py:
 
 Which resolves to:
   POST   /api/v1/accounts/register/
-  GET    /api/v1/accounts/verify-email/?token=
+  POST   /api/v1/accounts/verify-email/
   POST   /api/v1/accounts/login/
   POST   /api/v1/accounts/logout/
   POST   /api/v1/accounts/token/refresh/

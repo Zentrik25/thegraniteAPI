@@ -35,7 +35,7 @@ def _send_html_email(*, subject: str, to: str, text_body: str, html_body: str) -
 # Email HTML templates
 # ---------------------------------------------------------------------------
 
-def _verification_email_html(verify_url: str) -> str:
+def _verification_email_html(code: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -52,21 +52,13 @@ def _verification_email_html(verify_url: str) -> str:
           <td style="padding:40px;">
             <h1 style="margin:0 0 16px;font-size:24px;color:#181411;">Verify your email address</h1>
             <p style="margin:0 0 24px;font-size:15px;line-height:1.7;color:#555;">
-              Welcome to The Granite Post. Click the button below to activate your account.
-              This link expires in <strong>24 hours</strong>.
+              Welcome to The Granite Post. Enter the code below on the verification page to activate your account.
+              This code expires in <strong>1 hour</strong>.
             </p>
-            <table cellpadding="0" cellspacing="0" style="margin:0 0 32px;">
-              <tr>
-                <td style="background:#981b1e;border-radius:6px;">
-                  <a href="{verify_url}"
-                     style="display:inline-block;padding:14px 32px;color:#fff;font-size:15px;font-weight:700;text-decoration:none;letter-spacing:-0.2px;">
-                    Verify email address
-                  </a>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:0 0 8px;font-size:13px;color:#888;">Or copy and paste this link into your browser:</p>
-            <p style="margin:0 0 32px;font-size:12px;color:#981b1e;word-break:break-all;">{verify_url}</p>
+            <div style="background:#f8f5f0;border:2px solid #981b1e;border-radius:8px;padding:24px 40px;text-align:center;margin:0 0 32px;">
+              <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#888;">Your verification code</p>
+              <p style="margin:0;font-size:40px;font-weight:700;letter-spacing:10px;color:#981b1e;font-family:monospace;">{code}</p>
+            </div>
             <p style="margin:0;font-size:13px;color:#aaa;">
               If you did not create a Granite Post account you can safely ignore this email.
             </p>
@@ -152,20 +144,20 @@ def send_verification_email(self, reader_id: str) -> None:
         logger.warning("send_verification_email: reader_id=%s not found — skipping.", reader_id)
         return
 
-    verify_url = _build_frontend_url("/verify-email", reader.email_verification_token)
+    code = reader.email_verification_token
 
     try:
         _send_html_email(
-            subject="Verify your Granite Post account",
+            subject="Your Granite Post verification code",
             to=reader.email,
             text_body=(
                 "Welcome to The Granite Post.\n\n"
-                "Verify your email address by opening the link below:\n"
-                f"{verify_url}\n\n"
-                "This link expires in 24 hours.\n\n"
+                f"Your email verification code is: {code}\n\n"
+                "Enter this code on the verification page to activate your account.\n"
+                "This code expires in 1 hour.\n\n"
                 "If you did not create this account, you can ignore this email."
             ),
-            html_body=_verification_email_html(verify_url),
+            html_body=_verification_email_html(code),
         )
     except Exception as exc:
         logger.error(

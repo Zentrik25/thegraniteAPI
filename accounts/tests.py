@@ -181,56 +181,51 @@ class EmailVerificationTests(APITestCase):
 
     def setUp(self):
         self.reader = make_reader(verified=False)
+        # Set a valid expiry so verification code checks pass.
+        self.reader.email_verification_token_expires = timezone.now() + timedelta(hours=1)
+        self.reader.save(update_fields=["email_verification_token_expires"])
 
-    def test_verify_valid_token_returns_200(self):
-        r = self.client.get(
-            f"/api/v1/accounts/verify-email/"
-            f"?token={self.reader.email_verification_token}"
+    def _post_code(self, email=None, code=None):
+        return self.client.post(
+            "/api/v1/accounts/verify-email/",
+            {"email": email or self.reader.email, "code": code or self.reader.email_verification_token},
+            format="json",
         )
+
+    def test_verify_valid_code_returns_200(self):
+        r = self._post_code()
         self.assertEqual(r.status_code, status.HTTP_200_OK)
 
     def test_verify_sets_is_email_verified(self):
-        self.client.get(
-            f"/api/v1/accounts/verify-email/"
-            f"?token={self.reader.email_verification_token}"
-        )
+        self._post_code()
         self.reader.refresh_from_db()
         self.assertTrue(self.reader.is_email_verified)
 
-    def test_verify_token_rotated_after_use(self):
-        original_token = self.reader.email_verification_token
-        self.client.get(f"/api/v1/accounts/verify-email/?token={original_token}")
+    def test_verify_code_rotated_after_use(self):
+        original_code = self.reader.email_verification_token
+        self._post_code()
         self.reader.refresh_from_db()
-        self.assertNotEqual(self.reader.email_verification_token, original_token)
+        self.assertNotEqual(self.reader.email_verification_token, original_code)
 
     def test_verify_already_verified_returns_400(self):
         self.reader.is_email_verified = True
         self.reader.save()
-        r = self.client.get(
-            f"/api/v1/accounts/verify-email/"
-            f"?token={self.reader.email_verification_token}"
-        )
+        r = self._post_code()
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_verify_invalid_token_returns_400(self):
-        r = self.client.get(
-            f"/api/v1/accounts/verify-email/?token={uuid.uuid4()}"
-        )
+    def test_verify_invalid_code_returns_400(self):
+        r = self._post_code(code="000000")
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_verify_missing_token_returns_400(self):
-        r = self.client.get("/api/v1/accounts/verify-email/")
+    def test_verify_missing_fields_returns_400(self):
+        r = self.client.post("/api/v1/accounts/verify-email/", {}, format="json")
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_verify_expired_token_returns_400(self):
-        # Backdate date_joined beyond the 24-hour window.
+    def test_verify_expired_code_returns_400(self):
         ReaderAccount.objects.filter(pk=self.reader.pk).update(
-            date_joined=timezone.now() - timedelta(hours=25)
+            email_verification_token_expires=timezone.now() - timedelta(hours=2)
         )
-        r = self.client.get(
-            f"/api/v1/accounts/verify-email/"
-            f"?token={self.reader.email_verification_token}"
-        )
+        r = self._post_code()
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
 
 
@@ -248,22 +243,18 @@ class AccountEmailTaskTests(TestCase):
             verified=False,
         )
 
-    def test_send_verification_email_builds_frontend_url_and_does_not_log_token(self):
+    def test_send_verification_email_sends_code_and_does_not_log_email(self):
         from .tasks import send_verification_email
 
-        token = str(self.reader.email_verification_token)
+        code = self.reader.email_verification_token
         with self.assertLogs("accounts.tasks", level="INFO") as captured:
             send_verification_email(str(self.reader.id))
 
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["taskreader@example.com"])
-        self.assertIn("Verify your Granite Post account", mail.outbox[0].subject)
-        self.assertIn(
-            f"http://frontend.test/verify-email?token={token}",
-            mail.outbox[0].body,
-        )
+        self.assertIn("verification code", mail.outbox[0].subject.lower())
+        self.assertIn(code, mail.outbox[0].body)
         log_output = "\n".join(captured.output)
-        self.assertNotIn(token, log_output)
         # Raw email address must not appear — only masked form is acceptable.
         self.assertNotIn("taskreader@example.com", log_output)
 

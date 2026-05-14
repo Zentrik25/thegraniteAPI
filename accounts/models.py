@@ -13,11 +13,16 @@ Model inventory:
   BlacklistedReaderToken — revoked reader JWT refresh tokens (jti store)
 """
 
+import secrets
 import uuid
 
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 from django.utils import timezone
+
+
+def _generate_verification_code() -> str:
+    return f"{secrets.randbelow(900000) + 100000}"
 
 
 # ---------------------------------------------------------------------------
@@ -85,10 +90,16 @@ class ReaderAccount(models.Model):
         db_index=True,
         help_text="Must be True before the reader can log in.",
     )
-    email_verification_token = models.UUIDField(
-        default=uuid.uuid4,
-        unique=True,
-        help_text="Token sent in the verification email. Expires 24 h after registration.",
+    email_verification_token = models.CharField(
+        max_length=6,
+        default=_generate_verification_code,
+        db_index=True,
+        help_text="6-digit code sent in the verification email.",
+    )
+    email_verification_token_expires = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the verification code expires (1 hour after sending).",
     )
 
     # ------------------------------------------------------------------

@@ -30,6 +30,7 @@ Endpoint map:
 """
 
 import logging
+import secrets
 import uuid
 from datetime import timedelta
 
@@ -101,6 +102,10 @@ class RegisterView(APIView):
                 reader.id,
             )
 
+        # Set the verification code expiry (1 hour).
+        reader.email_verification_token_expires = timezone.now() + timedelta(hours=1)
+        reader.save(update_fields=["email_verification_token_expires"])
+
         logger.info(
             "Reader registered: pk=%s username=%s email=%s",
             reader.id, reader.username, _mask_email(reader.email),
@@ -125,7 +130,7 @@ class ResendVerificationView(APIView):
     permission_classes     = [AllowAny]
     throttle_classes       = [ReaderPasswordResetThrottle]
 
-    _RESPONSE = {"detail": "If an unverified account exists for this email, a new verification link has been sent."}
+    _RESPONSE = {"detail": "If an unverified account exists for this email, a new code has been sent."}
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -145,6 +150,11 @@ class ResendVerificationView(APIView):
         except ReaderAccount.DoesNotExist:
             return Response(self._RESPONSE, status=status.HTTP_202_ACCEPTED)
 
+        # Regenerate code and reset expiry.
+        reader.email_verification_token = f"{secrets.randbelow(900000) + 100000}"
+        reader.email_verification_token_expires = timezone.now() + timedelta(hours=1)
+        reader.save(update_fields=["email_verification_token", "email_verification_token_expires"])
+
         from .tasks import send_verification_email
         try:
             send_verification_email.apply_async(args=[str(reader.id)], queue="slow")
@@ -155,7 +165,7 @@ class ResendVerificationView(APIView):
             )
 
         logger.info(
-            "Verification email resent: pk=%s email=%s", reader.id, _mask_email(reader.email)
+            "Verification code resent: pk=%s email=%s", reader.id, _mask_email(reader.email)
         )
 
         return Response(self._RESPONSE, status=status.HTTP_202_ACCEPTED)
@@ -163,54 +173,56 @@ class ResendVerificationView(APIView):
 
 class VerifyEmailView(APIView):
     """
-    GET /api/v1/accounts/verify-email/?token=<uuid>
+    POST /api/v1/accounts/verify-email/
 
-    Marks the reader's email as verified. The token is included in the
-    registration email and expires 24 hours after registration.
+    Verifies the reader's email using the 6-digit code sent to their inbox.
+    Body: { "email": "...", "code": "123456" }
+    Rate limited to prevent brute-force against the 6-digit code space.
     """
 
     authentication_classes = []
     permission_classes     = [AllowAny]
-    throttle_classes       = []
+    throttle_classes       = [ReaderLoginThrottle]
 
-    def get(self, request):
-        raw_token = request.query_params.get("token", "").strip()
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+        code  = request.data.get("code", "").strip()
 
-        if not raw_token:
+        if not email or not code:
             return Response(
-                {"detail": "Verification token is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            token_uuid = uuid.UUID(raw_token)
-        except ValueError:
-            return Response(
-                {"detail": "Invalid verification token format."},
+                {"detail": "Email and code are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             reader = ReaderAccount.objects.get(
-                email_verification_token=token_uuid,
+                email=email,
+                email_verification_token=code,
                 is_email_verified=False,
             )
         except ReaderAccount.DoesNotExist:
             return Response(
-                {"detail": "Invalid or already-used verification token."},
+                {"detail": "Invalid or already-used verification code."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Tokens are valid for 24 hours from registration.
-        if timezone.now() > reader.date_joined + timedelta(hours=24):
+        if (
+            reader.email_verification_token_expires is None
+            or timezone.now() > reader.email_verification_token_expires
+        ):
             return Response(
-                {"detail": "Verification token has expired. Please register again."},
+                {"detail": "Code has expired. Request a new one below."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        reader.is_email_verified        = True
-        reader.email_verification_token = uuid.uuid4()   # rotate — prevents replay
-        reader.save(update_fields=["is_email_verified", "email_verification_token"])
+        reader.is_email_verified                = True
+        reader.email_verification_token         = f"{secrets.randbelow(900000) + 100000}"  # rotate
+        reader.email_verification_token_expires = None
+        reader.save(update_fields=[
+            "is_email_verified",
+            "email_verification_token",
+            "email_verification_token_expires",
+        ])
 
         logger.info("Reader email verified: pk=%s email=%s", reader.id, _mask_email(reader.email))
 
