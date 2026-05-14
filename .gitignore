@@ -17,6 +17,7 @@ media/
 venv/
 .venv/
 env/
+vps notes
 
 # IDE
 .vscode/
@@ -27,3 +28,4 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+.gstack/

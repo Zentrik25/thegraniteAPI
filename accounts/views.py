@@ -92,6 +92,10 @@ class RegisterView(APIView):
         serializer.is_valid(raise_exception=True)
         reader = serializer.save()
 
+        # Persist expiry BEFORE queuing so the worker always reads a valid timestamp.
+        reader.email_verification_token_expires = timezone.now() + timedelta(hours=1)
+        reader.save(update_fields=["email_verification_token_expires"])
+
         from .tasks import send_verification_email
         try:
             send_verification_email.apply_async(args=[str(reader.id)], queue="slow")
@@ -101,10 +105,6 @@ class RegisterView(APIView):
                 "Could not queue verification email for reader pk=%s — broker unreachable.",
                 reader.id,
             )
-
-        # Set the verification code expiry (1 hour).
-        reader.email_verification_token_expires = timezone.now() + timedelta(hours=1)
-        reader.save(update_fields=["email_verification_token_expires"])
 
         logger.info(
             "Reader registered: pk=%s username=%s email=%s",
