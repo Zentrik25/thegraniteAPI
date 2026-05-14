@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from config import settings as project_settings_module
@@ -173,6 +174,7 @@ class EmailConfigurationTests(TestCase):
             project_settings_module._validate_email_settings(
                 production=True,
                 email_host="localhost",
+                email_host_password="SG.test",
                 email_backend=self._smtp,
             )
 
@@ -181,6 +183,16 @@ class EmailConfigurationTests(TestCase):
             project_settings_module._validate_email_settings(
                 production=True,
                 email_host="127.0.0.1",
+                email_host_password="SG.test",
+                email_backend=self._smtp,
+            )
+
+    def test_production_smtp_without_password_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            project_settings_module._validate_email_settings(
+                production=True,
+                email_host="smtp.sendgrid.net",
+                email_host_password="",
                 email_backend=self._smtp,
             )
 
@@ -189,6 +201,7 @@ class EmailConfigurationTests(TestCase):
         project_settings_module._validate_email_settings(
             production=True,
             email_host="smtp.sendgrid.net",
+            email_host_password="SG.test",
             email_backend=self._smtp,
         )
 
@@ -197,6 +210,7 @@ class EmailConfigurationTests(TestCase):
         project_settings_module._validate_email_settings(
             production=True,
             email_host="localhost",
+            email_host_password="",
             email_backend="django.core.mail.backends.console.EmailBackend",
         )
 
@@ -205,6 +219,7 @@ class EmailConfigurationTests(TestCase):
         project_settings_module._validate_email_settings(
             production=False,
             email_host="localhost",
+            email_host_password="",
             email_backend=self._smtp,
         )
 
@@ -535,6 +550,17 @@ class CeleryBrokerValidationTests(TestCase):
             self.assertIn("REDIS_URL", str(exc))
         else:
             self.fail("Expected ImproperlyConfigured was not raised.")
+
+    def test_procfile_worker_consumes_slow_queue(self):
+        """
+        Transactional emails and push notifications are published to the
+        slow queue, so the production worker must subscribe to it.
+        """
+        procfile = Path(project_settings_module.BASE_DIR) / "Procfile"
+        text = procfile.read_text(encoding="utf-8")
+
+        self.assertIn("worker: celery -A config worker", text)
+        self.assertIn("-Q celery,slow", text)
 
 
 class CeleryStartupWarningTests(TestCase):

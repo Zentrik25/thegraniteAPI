@@ -63,6 +63,7 @@ def _validate_email_settings(
     *,
     production: bool,
     email_host: str,
+    email_host_password: str,
     email_backend: str,
 ) -> None:
     """
@@ -78,6 +79,11 @@ def _validate_email_settings(
         raise ImproperlyConfigured(
             "EMAIL_HOST must be set to a real SMTP relay when DEBUG=False. "
             "Currently pointing at localhost, which will not deliver email in production."
+        )
+    if email_backend == smtp_backend and not email_host_password:
+        raise ImproperlyConfigured(
+            "EMAIL_HOST_PASSWORD must be set when DEBUG=False and SMTP email is enabled. "
+            "Without SMTP credentials, verification and password reset emails will not deliver."
         )
 
 # Load .env file before anything else
@@ -514,6 +520,7 @@ EMAIL_TIMEOUT   = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 _validate_email_settings(
     production=_PRODUCTION,
     email_host=EMAIL_HOST,
+    email_host_password=EMAIL_HOST_PASSWORD,
     email_backend=EMAIL_BACKEND,
 )
 

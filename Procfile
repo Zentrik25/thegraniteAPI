@@ -23,5 +23,5 @@
 #   - Scale worker horizontally as task throughput demands.
 
 web:    gunicorn config.wsgi:application --workers 4 --timeout 120 --bind 0.0.0.0:$PORT
-worker: celery -A config worker --loglevel=info --concurrency=2
+worker: celery -A config worker --loglevel=info --concurrency=2 -Q celery,slow
 beat:   celery -A config beat --loglevel=info
