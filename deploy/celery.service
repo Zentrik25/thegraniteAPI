@@ -1,0 +1,35 @@
+[Unit]
+Description=Granite Post Celery Worker
+After=network.target redis.service
+
+[Service]
+Type=forking
+User=granite
+Group=granite
+WorkingDirectory=/home/granite/apps/thegraniteapi
+Environment="PATH=/home/granite/apps/thegraniteapi/venv/bin"
+EnvironmentFile=/home/granite/apps/thegraniteapi/.env
+ExecStart=/home/granite/apps/thegraniteapi/venv/bin/celery \
+    multi start worker \
+    -A config \
+    -Q fast,slow,celery \
+    --loglevel=info \
+    --logfile=/var/log/granite/celery/%n%I.log \
+    --pidfile=/var/run/celery/%n.pid \
+    --concurrency=2
+ExecStop=/home/granite/apps/thegraniteapi/venv/bin/celery \
+    multi stopwait worker \
+    --pidfile=/var/run/celery/%n.pid
+ExecReload=/home/granite/apps/thegraniteapi/venv/bin/celery \
+    multi restart worker \
+    -A config \
+    -Q fast,slow,celery \
+    --loglevel=info \
+    --logfile=/var/log/granite/celery/%n%I.log \
+    --pidfile=/var/run/celery/%n.pid \
+    --concurrency=2
+RuntimeDirectory=celery
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

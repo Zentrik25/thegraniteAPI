@@ -152,30 +152,20 @@ def warm_featured_cache() -> None:
 
 
 @shared_task(
-    bind=True,
     queue="slow",
-    max_retries=3,
-    default_retry_delay=120,
+    max_retries=0,
     ignore_result=True,
     name="core.tasks.ping_sitemaps",
 )
-def ping_sitemaps(self) -> None:
+def ping_sitemaps() -> None:
+    # Google deprecated sitemap pinging in Jan 2023 — only Bing still supports it.
     sitemap_url = "https://thegranite.co.zw/sitemap.xml"
-    endpoints   = [
-        f"https://www.google.com/ping?sitemap={sitemap_url}",
-        f"https://www.bing.com/ping?sitemap={sitemap_url}",
-    ]
-    errors = []
-    for url in endpoints:
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                logger.info("Sitemap pinged: %s → HTTP %d.", url, resp.status)
-        except (urllib.error.URLError, OSError) as exc:
-            logger.warning("Sitemap ping failed for %s: %s", url, exc)
-            errors.append(str(exc))
-
-    if errors and self.request.retries < self.max_retries:
-        raise self.retry(exc=Exception("; ".join(errors)))
+    url = f"https://www.bing.com/ping?sitemap={sitemap_url}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            logger.info("Sitemap pinged: Bing → HTTP %d.", resp.status)
+    except (urllib.error.URLError, OSError) as exc:
+        logger.warning("Sitemap ping failed: %s", exc)
 
 
 @shared_task(
